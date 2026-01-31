@@ -61,6 +61,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
     private static final String keyMarkerColor = "pgmm-markercolor";
     private static final String keyClaimDistance = "pgmm-claimdistance";
     private static final String keySplitAlertThreshold = "pgmm-splitalertthreshold";
+    private static final String keySplitAlertWindowSeconds = "pgmm-splitwindow";
     private static final String keyReconnectStroke = "pgmm-markerstroke";
     private static final String keyReconnectColor = "pgmm-markerlinecolor";
 
@@ -87,6 +88,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             Core.settings.defaults(keyMarkerColor, "ffffff");
             Core.settings.defaults(keyClaimDistance, 5);
             Core.settings.defaults(keySplitAlertThreshold, 10000);
+            Core.settings.defaults(keySplitAlertWindowSeconds, 4);
             Core.settings.defaults(keyReconnectStroke, 2);
             Core.settings.defaults(keyReconnectColor, "ffa500");
 
@@ -125,6 +127,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             table.textPref(keyMarkerColor, "ffffff", v -> refreshMarkerColor());
             table.sliderPref(keyClaimDistance, 5, 1, 20, 1, v -> v + "");
             table.sliderPref(keySplitAlertThreshold, 10000, 1000, 50000, 500, v -> v + "/s");
+            table.sliderPref(keySplitAlertWindowSeconds, 4, 1, 15, 1, v -> v + "s");
             table.sliderPref(keyReconnectStroke, 2, 1, 8, 1, v -> v + "");
             table.textPref(keyReconnectColor, "ffa500", v -> refreshReconnectColor());
         });
@@ -241,11 +244,11 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
 
         Color textColor = Tmp.c2.set(markerColor);
 
-        for(int i = 0; i < cache.grids.size; i++){
-            GridInfo info = cache.grids.get(i);
+        for(int i = 0; i < cache.markers.size; i++){
+            MarkerInfo info = cache.markers.get(i);
             PowerGraph graph = info.graph;
             if(graph == null) continue;
-            if(!viewRect.contains(info.centerX, info.centerY)) continue;
+            if(!viewRect.contains(info.x, info.y)) continue;
 
             float balance = graph.getPowerBalance() * 60f;
             String text = (balance >= 0f ? "+" : "") + UI.formatAmount((long)balance);
@@ -255,11 +258,11 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             float margin = 3f * invScale * markerScale;
 
             Draw.color(0f, 0f, 0f, 0.35f);
-            Fill.rect(info.centerX, info.centerY, layout.width + margin * 2f, layout.height + margin * 2f);
+            Fill.rect(info.x, info.y, layout.width + margin * 2f, layout.height + margin * 2f);
             Draw.color();
 
             font.setColor(textColor);
-            font.draw(text, info.centerX, info.centerY + layout.height / 2f, 0, Align.center, false);
+            font.draw(text, info.x, info.y + layout.height / 2f, 0, Align.center, false);
         }
 
         Draw.reset();
@@ -411,11 +414,11 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             Color textColor = Tmp.c2.set(markerColor);
             textColor.a *= parentAlpha;
 
-            for(int i = 0; i < cache.grids.size; i++){
-                GridInfo info = cache.grids.get(i);
+            for(int i = 0; i < cache.markers.size; i++){
+                MarkerInfo info = cache.markers.get(i);
                 PowerGraph graph = info.graph;
                 if(graph == null) continue;
-                if(!viewRect.contains(info.centerX, info.centerY)) continue;
+                if(!viewRect.contains(info.x, info.y)) continue;
 
                 float balance = graph.getPowerBalance() * 60f;
                 String text = (balance >= 0f ? "+" : "") + UI.formatAmount((long)balance);
@@ -425,11 +428,11 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
                 float margin = 3f * invScale * markerScale;
 
                 Draw.color(0f, 0f, 0f, 0.35f * parentAlpha);
-                Fill.rect(info.centerX, info.centerY, layout.width + margin * 2f, layout.height + margin * 2f);
+                Fill.rect(info.x, info.y, layout.width + margin * 2f, layout.height + margin * 2f);
                 Draw.color();
 
                 font.setColor(textColor);
-                font.draw(text, info.centerX, info.centerY + layout.height / 2f, 0, Align.center, false);
+                font.draw(text, info.x, info.y + layout.height / 2f, 0, Align.center, false);
             }
 
             Draw.reset();
@@ -448,7 +451,11 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
 
     private static class GridInfo{
         PowerGraph graph;
-        float centerX, centerY;
+    }
+
+    private static class MarkerInfo{
+        PowerGraph graph;
+        float x, y;
     }
 
     private static class FullMinimapAccess{
@@ -515,6 +522,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
 
         private final ObjectSet<PowerGraph> graphs = new ObjectSet<>();
         private final Seq<GridInfo> grids = new Seq<>();
+        private final Seq<MarkerInfo> markers = new Seq<>();
 
         private float nextUpdateTime = 0f;
 
@@ -529,6 +537,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
         public void clear(){
             graphs.clear();
             grids.clear();
+            markers.clear();
             nextUpdateTime = 0f;
             nextFullUpdateTime = 0f;
 
@@ -556,6 +565,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
 
             graphs.clear();
             grids.clear();
+            markers.clear();
 
             for(int i = 0; i < mindustry.gen.Groups.build.size(); i++){
                 mindustry.gen.Building build = mindustry.gen.Groups.build.index(i);
@@ -565,25 +575,84 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             }
 
             for(PowerGraph graph : graphs){
-                float sx = 0f, sy = 0f;
+                GridInfo info = new GridInfo();
+                info.graph = graph;
+                grids.add(info);
+
+                //For sparse laser-linked grids, render one balance marker per contiguous "chunk" of buildings.
+                addClusterMarkers(graph);
+            }
+        }
+
+        private void addClusterMarkers(PowerGraph graph){
+            if(graph == null || graph.all == null || graph.all.isEmpty()) return;
+
+            //Collect occupied tiles (all linked tiles for each building) for this graph.
+            IntSet occupied = new IntSet();
+            IntSeq occupiedList = new IntSeq();
+
+            Seq<mindustry.gen.Building> all = graph.all;
+            for(int i = 0; i < all.size; i++){
+                mindustry.gen.Building b = all.get(i);
+                if(b == null || b.team != player.team() || b.tile == null) continue;
+                b.tile.getLinkedTiles(t -> {
+                    int pos = t.pos();
+                    if(!occupied.contains(pos)){
+                        occupied.add(pos);
+                        occupiedList.add(pos);
+                    }
+                });
+            }
+
+            if(occupiedList.isEmpty()) return;
+
+            //Flood-fill connected components on the tile grid, using 4-neighbor adjacency.
+            IntSet visited = new IntSet();
+            IntQueue q = new IntQueue();
+            int maxMarkersPerGraph = 64;
+
+            for(int i = 0; i < occupiedList.size; i++){
+                int start = occupiedList.get(i);
+                if(visited.contains(start)) continue;
+
+                float sumX = 0f, sumY = 0f;
                 int count = 0;
 
-                Seq<mindustry.gen.Building> all = graph.all;
-                for(int i = 0; i < all.size; i++){
-                    mindustry.gen.Building b = all.get(i);
-                    if(b == null || b.team != player.team()) continue;
-                    sx += b.x;
-                    sy += b.y;
+                visited.add(start);
+                q.addLast(start);
+
+                while(q.size > 0){
+                    int cur = q.removeFirst();
+                    int x = Point2.x(cur);
+                    int y = Point2.y(cur);
+
+                    sumX += (x + 0.5f) * tilesize;
+                    sumY += (y + 0.5f) * tilesize;
                     count++;
+
+                    int n;
+                    n = Point2.pack(x + 1, y);
+                    if(x + 1 < world.width() && occupied.contains(n) && !visited.contains(n)){ visited.add(n); q.addLast(n); }
+                    n = Point2.pack(x - 1, y);
+                    if(x - 1 >= 0 && occupied.contains(n) && !visited.contains(n)){ visited.add(n); q.addLast(n); }
+                    n = Point2.pack(x, y + 1);
+                    if(y + 1 < world.height() && occupied.contains(n) && !visited.contains(n)){ visited.add(n); q.addLast(n); }
+                    n = Point2.pack(x, y - 1);
+                    if(y - 1 >= 0 && occupied.contains(n) && !visited.contains(n)){ visited.add(n); q.addLast(n); }
                 }
 
                 if(count <= 0) continue;
 
-                GridInfo info = new GridInfo();
-                info.graph = graph;
-                info.centerX = sx / count;
-                info.centerY = sy / count;
-                grids.add(info);
+                MarkerInfo m = new MarkerInfo();
+                m.graph = graph;
+                m.x = sumX / count;
+                m.y = sumY / count;
+                markers.add(m);
+
+                if(markers.size >= maxMarkersPerGraph){
+                    //Avoid UI spam/perf issues on extreme maps.
+                    break;
+                }
             }
         }
 
@@ -992,12 +1061,14 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
     }
 
     private class SplitWatcher{
-        private static final float scanInterval = 60f;
+        private static final float scanInterval = 30f;
         private static final float cooldown = 60f * 10f;
 
         private final IntIntMap lastGraphByBuildPos = new IntIntMap();
+        //per-second (UI unit) power-in of last scan
         private final IntMap<Float> lastGraphPowerIn = new IntMap<>();
         private final IntMap<Float> lastSplitTime = new IntMap<>();
+        private final IntMap<PendingSplit> pendingSplits = new IntMap<>();
 
         private float nextScan = 0f;
 
@@ -1009,14 +1080,18 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
                 lastGraphByBuildPos.clear();
                 lastGraphPowerIn.clear();
                 lastSplitTime.clear();
+                pendingSplits.clear();
                 return;
             }
 
             int threshold = Core.settings.getInt(keySplitAlertThreshold, 10000);
+            int windowSeconds = Core.settings.getInt(keySplitAlertWindowSeconds, 4);
+            float windowFrames = Math.max(1f, windowSeconds) * 60f;
 
             IntMap<IntSet> prevToNew = new IntMap<>();
             IntMap<Float> currentPowerIn = new IntMap<>();
             IntMap<Float> currentBalance = new IntMap<>();
+            IntSet currentIds = new IntSet();
 
             //scan all player buildings with power modules
             for(int i = 0; i < mindustry.gen.Groups.build.size(); i++){
@@ -1030,8 +1105,9 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
                 lastGraphByBuildPos.put(pos, newId);
 
                 //build stats
-                currentPowerIn.put(newId, b.power.graph.getLastScaledPowerIn());
-                currentBalance.put(newId, b.power.graph.getPowerBalance());
+                currentPowerIn.put(newId, b.power.graph.getLastScaledPowerIn() * 60f);
+                currentBalance.put(newId, b.power.graph.getPowerBalance() * 60f);
+                currentIds.add(newId);
 
                 if(prevId != Integer.MIN_VALUE && prevId != newId){
                     IntSet set = prevToNew.get(prevId);
@@ -1043,11 +1119,18 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
                 }
             }
 
-            //detect splits
+            //register split events (including the case where one side keeps the old graph ID)
             for(IntMap.Entry<IntSet> e : prevToNew){
                 int prevId = e.key;
-                IntSet newIds = e.value;
-                if(newIds.size <= 1) continue;
+                IntSet changedIds = e.value;
+
+                //result set = changed graph IDs + (prevId if it still exists after the split)
+                IntSet resultIds = new IntSet();
+                changedIds.each(resultIds::add);
+                if(currentIds.contains(prevId)){
+                    resultIds.add(prevId);
+                }
+                if(resultIds.size < 2) continue;
 
                 float prevPowerIn = lastGraphPowerIn.get(prevId, 0f);
                 if(prevPowerIn < threshold) continue;
@@ -1055,37 +1138,87 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
                 float lastTime = lastSplitTime.get(prevId, -999999f);
                 if(Time.time - lastTime < cooldown) continue;
 
-                //pick one negative + one strongest other
-                final int[] negativeId = {-1};
-                final int[] otherId = {-1};
-                final float[] bestOtherPower = {Float.NEGATIVE_INFINITY};
+                PendingSplit pending = pendingSplits.get(prevId);
+                if(pending == null || Time.time > pending.expiresAt){
+                    pending = new PendingSplit();
+                    pending.prevId = prevId;
+                    pending.createdAt = Time.time;
+                    pending.expiresAt = Time.time + windowFrames;
+                    pending.resultIds.clear();
+                    resultIds.each(pending.resultIds::add);
+                    pendingSplits.put(prevId, pending);
+                }else{
+                    //keep original window; just widen the set of resulting IDs
+                    resultIds.each(pending.resultIds::add);
+                }
+            }
 
-                newIds.each(id -> {
-                    if(negativeId[0] != -1) return;
-                    if(currentBalance.get(id, 0f) < 0f){
+            //evaluate pending split windows; if any resulting grid goes negative within the window, fire alert
+            IntSeq toRemove = new IntSeq();
+            for(IntMap.Entry<PendingSplit> e : pendingSplits){
+                PendingSplit pending = e.value;
+                if(pending == null) continue;
+
+                if(Time.time > pending.expiresAt){
+                    toRemove.add(pending.prevId);
+                    continue;
+                }
+
+                final int[] negativeId = {-1};
+                final float[] mostNegative = {0f};
+
+                pending.resultIds.each(id -> {
+                    float bal = currentBalance.get(id, 0f);
+                    if(bal < mostNegative[0]){
+                        mostNegative[0] = bal;
                         negativeId[0] = id;
                     }
                 });
+
                 if(negativeId[0] == -1) continue;
 
-                newIds.each(id -> {
+                //pick a "stable" other side to reconnect to: highest power-in per second
+                final int[] bestOther = {-1};
+                final float[] bestPower = {Float.NEGATIVE_INFINITY};
+                pending.resultIds.each(id -> {
                     if(id == negativeId[0]) return;
                     float pin = currentPowerIn.get(id, 0f);
-                    if(pin > bestOtherPower[0]){
-                        bestOtherPower[0] = pin;
-                        otherId[0] = id;
+                    if(pin > bestPower[0]){
+                        bestPower[0] = pin;
+                        bestOther[0] = id;
                     }
                 });
-                if(otherId[0] == -1) continue;
+                if(bestOther[0] == -1) continue;
 
                 int aId = negativeId[0];
-                int bId = otherId[0];
+                int bId = bestOther[0];
 
                 ReconnectResult reconnect = findReconnectPoint(aId, bId);
-                if(reconnect != null){
-                    lastSplitTime.put(prevId, Time.time);
-                    alert.trigger(aId, bId, reconnect.midX, reconnect.midY, reconnect.ax, reconnect.ay, reconnect.bx, reconnect.by);
+                if(reconnect == null){
+                    //fallback: try any other candidate
+                    final ReconnectResult[] found = {null};
+                    final int[] foundB = {bId};
+                    pending.resultIds.each(id -> {
+                        if(found[0] != null) return;
+                        if(id == aId) return;
+                        ReconnectResult r = findReconnectPoint(aId, id);
+                        if(r != null){
+                            found[0] = r;
+                            foundB[0] = id;
+                        }
+                    });
+                    reconnect = found[0];
+                    bId = foundB[0];
                 }
+
+                if(reconnect != null){
+                    lastSplitTime.put(pending.prevId, Time.time);
+                    alert.trigger(aId, bId, reconnect.midX, reconnect.midY, reconnect.ax, reconnect.ay, reconnect.bx, reconnect.by);
+                    toRemove.add(pending.prevId);
+                }
+            }
+            for(int i = 0; i < toRemove.size; i++){
+                pendingSplits.remove(toRemove.get(i));
             }
 
             //store last stats
@@ -1093,6 +1226,13 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             for(IntMap.Entry<Float> e : currentPowerIn){
                 lastGraphPowerIn.put(e.key, e.value);
             }
+        }
+
+        private class PendingSplit{
+            int prevId;
+            float createdAt;
+            float expiresAt;
+            IntSet resultIds = new IntSet();
         }
 
         private ReconnectResult findReconnectPoint(int graphA, int graphB){
