@@ -55,12 +55,14 @@ import static mindustry.Vars.world;
 
 public class PowerGridMinimapMod extends mindustry.mod.Mod{
     private static final String overlayName = "pgmm-overlay";
+    private static final String mi2OverlayName = "pgmm-mi2-overlay";
 
     private static final String keyEnabled = "pgmm-enabled";
     private static final String keyGridAlpha = "pgmm-gridalpha";
     private static final String keyMarkerScale = "pgmm-markerscale";
     private static final String keyMarkerColor = "pgmm-markercolor";
     private static final String keyHudMarkerFollowScale = "pgmm-hudmarkerscale";
+    private static final String keyDrawOnMi2Minimap = "pgmm-mi2minimap";
     private static final String keyClaimDistance = "pgmm-claimdistance";
     private static final String keySplitAlertThreshold = "pgmm-splitalertthreshold";
     private static final String keySplitAlertWindowSeconds = "pgmm-splitwindow";
@@ -83,6 +85,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
     private final SplitWatcher splitWatcher = new SplitWatcher();
     private final SplitAlert alert = new SplitAlert();
     private final MindustryXMarkers xMarkers = new MindustryXMarkers();
+    private final Mi2MinimapIntegration mi2 = new Mi2MinimapIntegration();
 
     public PowerGridMinimapMod(){
         Events.on(ClientLoadEvent.class, e -> {
@@ -91,6 +94,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             Core.settings.defaults(keyMarkerScale, 100);
             Core.settings.defaults(keyMarkerColor, "ffffff");
             Core.settings.defaults(keyHudMarkerFollowScale, 100);
+            Core.settings.defaults(keyDrawOnMi2Minimap, false);
             Core.settings.defaults(keyClaimDistance, 5);
             Core.settings.defaults(keySplitAlertThreshold, 10000);
             Core.settings.defaults(keySplitAlertWindowSeconds, 4);
@@ -102,6 +106,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             refreshMarkerColor();
             refreshReconnectColor();
             xMarkers.tryInit();
+            mi2.tryInit();
             Time.runTask(10f, this::ensureOverlayAttached);
         });
 
@@ -115,6 +120,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             if(Time.time >= nextAttachAttempt){
                 nextAttachAttempt = Time.time + 60f;
                 ensureOverlayAttached();
+                mi2.ensureAttached(cache, markerColor, alert);
             }
 
             splitWatcher.update();
@@ -133,6 +139,28 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             table.sliderPref(keyMarkerScale, 100, 50, 300, 10, v -> v + "%");
             table.textPref(keyMarkerColor, "ffffff", v -> refreshMarkerColor());
             table.sliderPref(keyHudMarkerFollowScale, 100, 0, 200, 10, v -> v + "%");
+
+            //MI2 minimap integration toggle (disabled if MI2 not installed).
+            table.row();
+            arc.scene.ui.layout.Cell<arc.scene.ui.CheckBox> mi2Cell = table.check("@setting.pgmm-mi2minimap.name", b -> {
+                if(mi2.isAvailable()){
+                    Core.settings.put(keyDrawOnMi2Minimap, b);
+                    mi2.ensureAttached(cache, markerColor, alert);
+                }else{
+                    Core.settings.put(keyDrawOnMi2Minimap, false);
+                }
+            }).checked(Core.settings.getBool(keyDrawOnMi2Minimap, false));
+            mi2Cell.update(cb -> {
+                boolean avail = mi2.isAvailable();
+                cb.setDisabled(!avail);
+                if(!avail){
+                    cb.setChecked(false);
+                    Core.settings.put(keyDrawOnMi2Minimap, false);
+                }else{
+                    cb.setChecked(Core.settings.getBool(keyDrawOnMi2Minimap, false));
+                }
+            });
+
             table.sliderPref(keyClaimDistance, 5, 1, 20, 1, v -> v + "");
             table.sliderPref(keySplitAlertThreshold, 10000, 1000, 50000, 500, v -> v + "/s");
             table.sliderPref(keySplitAlertWindowSeconds, 4, 1, 15, 1, v -> v + "s");
@@ -495,6 +523,234 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
 
             out.fromHsv(hue, sat, val);
             return out;
+        }
+    }
+
+    /** Optional integration with MI2-Utilities-Java minimap window. Uses reflection so missing MI2 won't crash. */
+    private static class Mi2MinimapIntegration{
+        private boolean initialized = false;
+        private boolean available = false;
+
+        private java.lang.reflect.Field minimapField;
+        private java.lang.reflect.Field rectField;
+        private java.lang.reflect.Method setRectMethod;
+
+        void tryInit(){
+            if(initialized) return;
+            initialized = true;
+            try{
+                Class<?> mm = Class.forName("mi2u.ui.MinimapMindow");
+                minimapField = mm.getField("m"); // public static Minimap2 m
+                Object minimap = minimapField.get(null);
+                if(minimap == null) throw new IllegalStateException("MI2 minimap not initialized");
+
+                Class<?> minimapType = minimap.getClass();
+                rectField = minimapType.getField("rect"); // public Rect rect
+                setRectMethod = minimapType.getMethod("setRect");
+
+                available = true;
+                Log.info("PGMM: MI2 minimap detected.");
+            }catch(Throwable ignored){
+                available = false;
+            }
+        }
+
+        boolean isAvailable(){
+            return available;
+        }
+
+        void ensureAttached(PowerGridCache cache, Color markerColor, SplitAlert alert){
+            if(!available) return;
+            if(!Core.settings.getBool(keyDrawOnMi2Minimap, false)){
+                detachIfPresent();
+                return;
+            }
+
+            try{
+                Object minimapObj = minimapField == null ? null : minimapField.get(null);
+                if(!(minimapObj instanceof Element)) return;
+                Element minimap = (Element)minimapObj;
+                if(minimap.parent == null) return;
+                if(!(minimap.parent instanceof Table)) return;
+
+                Table parent = (Table)minimap.parent;
+                if(parent.find(mi2OverlayName) != null) return;
+
+                Mi2Overlay overlay = new Mi2Overlay(minimap, cache, markerColor, alert, rectField, setRectMethod);
+                overlay.name = mi2OverlayName;
+                overlay.touchable = Touchable.disabled;
+                parent.addChild(overlay);
+            }catch(Throwable t){
+                available = false;
+                Log.err("PGMM: MI2 minimap attach failed; disabling integration.", t);
+            }
+        }
+
+        private void detachIfPresent(){
+            try{
+                Object minimapObj = minimapField == null ? null : minimapField.get(null);
+                if(!(minimapObj instanceof Element)) return;
+                Element minimap = (Element)minimapObj;
+                if(!(minimap.parent instanceof Table)) return;
+                Table parent = (Table)minimap.parent;
+                Element existing = parent.find(mi2OverlayName);
+                if(existing != null) existing.remove();
+            }catch(Throwable ignored){
+            }
+        }
+    }
+
+    private static class Mi2Overlay extends Element{
+        private final Element base;
+        private final PowerGridCache cache;
+        private final Color markerColor;
+        private final SplitAlert alert;
+
+        private final java.lang.reflect.Field rectField;
+        private final java.lang.reflect.Method setRectMethod;
+
+        private final Rect viewRect = new Rect();
+        private final Mat transform = new Mat();
+        private final Mat oldTransform = new Mat();
+
+        Mi2Overlay(Element base, PowerGridCache cache, Color markerColor, SplitAlert alert, java.lang.reflect.Field rectField, java.lang.reflect.Method setRectMethod){
+            this.base = base;
+            this.cache = cache;
+            this.markerColor = markerColor;
+            this.alert = alert;
+            this.rectField = rectField;
+            this.setRectMethod = setRectMethod;
+        }
+
+        @Override
+        public void act(float delta){
+            if(base != null){
+                setBounds(base.x, base.y, base.getWidth(), base.getHeight());
+            }
+            super.act(delta);
+        }
+
+        @Override
+        public void draw(){
+            if(!Core.settings.getBool(keyEnabled, true)) return;
+            if(!Core.settings.getBool(keyDrawOnMi2Minimap, false)) return;
+            if(renderer == null || renderer.minimap == null || renderer.minimap.getRegion() == null) return;
+            if(world == null || !state.isGame() || world.isGenerating()) return;
+            if(base == null || base.parent == null) return;
+
+            cache.updateBasic();
+            cache.updateFullOverlay();
+
+            if(!clipBegin()) return;
+
+            Rect r = getMi2Rect();
+            if(r == null){
+                clipEnd();
+                return;
+            }
+            viewRect.set(r);
+
+            float scale = width / viewRect.width;
+            float invScale = 1f / scale;
+
+            oldTransform.set(Draw.trans());
+
+            transform.idt();
+            transform.translate(x, y);
+            transform.scl(Tmp.v1.set(scale, height / viewRect.height));
+            transform.translate(-viewRect.x, -viewRect.y);
+            transform.translate(tilesize / 2f, tilesize / 2f);
+            Draw.trans(transform);
+
+            //same visuals as vanilla HUD minimap overlay
+            Texture overlayTex = cache.getFullOverlayTexture();
+            if(overlayTex != null){
+                overlayTex.setFilter(Texture.TextureFilter.nearest);
+                TextureRegion reg = Draw.wrap(overlayTex);
+                Draw.color(1f, 1f, 1f, parentAlpha);
+                Draw.rect(reg, world.width() * tilesize / 2f, world.height() * tilesize / 2f, world.width() * tilesize, world.height() * tilesize);
+            }
+
+            float alpha = Mathf.clamp(Core.settings.getInt(keyGridAlpha, 40) / 100f) * parentAlpha;
+            float rectAlpha = alpha * 0.18f;
+            for(int ri = 0; ri < cache.markerRects.size; ri++){
+                MarkerRectInfo mr = cache.markerRects.get(ri);
+                if(!viewRect.overlaps(mr.worldRect)) continue;
+                Color baseColor = MinimapOverlay.colorForGraph(mr.colorKey, Tmp.c1);
+                Color light = Tmp.c2.set(baseColor).lerp(Color.white, 0.75f);
+                Draw.color(light.r, light.g, light.b, rectAlpha);
+                Fill.rect(mr.worldRect.x + mr.worldRect.width / 2f, mr.worldRect.y + mr.worldRect.height / 2f, mr.worldRect.width, mr.worldRect.height);
+            }
+            Draw.color();
+
+            drawBalanceMarkers(invScale);
+            alert.drawHudMinimapMarker(invScale, viewRect);
+
+            Draw.trans(oldTransform);
+            Draw.reset();
+
+            clipEnd();
+        }
+
+        private Rect getMi2Rect(){
+            try{
+                if(setRectMethod != null){
+                    setRectMethod.invoke(base);
+                }
+                Object r = rectField == null ? null : rectField.get(base);
+                return r instanceof Rect ? (Rect)r : null;
+            }catch(Throwable ignored){
+                return null;
+            }
+        }
+
+        private void drawBalanceMarkers(float invScale){
+            if(player == null) return;
+
+            float markerScale = Core.settings.getInt(keyMarkerScale, 100) / 100f;
+            if(markerScale <= 0.001f) return;
+
+            float follow = Mathf.clamp(Core.settings.getInt(keyHudMarkerFollowScale, 100) / 100f, 0f, 2f);
+            float invScalePow = Mathf.pow(invScale, 1f - follow);
+
+            Font font = Fonts.outline;
+            GlyphLayout layout = Pools.obtain(GlyphLayout.class, GlyphLayout::new);
+
+            boolean ints = font.usesIntegerPositions();
+            font.setUseIntegerPositions(false);
+
+            float baseFontScale = (1f / 1.25f) / Math.max(0.0001f, Scl.scl(1f));
+            font.getData().setScale(baseFontScale * invScalePow * markerScale);
+
+            Color textColor = Tmp.c2.set(markerColor);
+            textColor.a *= parentAlpha;
+
+            for(int i = 0; i < cache.markers.size; i++){
+                MarkerInfo info = cache.markers.get(i);
+                PowerGraph graph = info.graph;
+                if(graph == null) continue;
+                if(!viewRect.contains(info.x, info.y)) continue;
+
+                float balance = graph.getPowerBalance() * 60f;
+                String text = (balance >= 0f ? "+" : "") + UI.formatAmount((long)balance);
+
+                layout.setText(font, text);
+
+                float margin = 3f * invScalePow * markerScale;
+
+                Draw.color(0f, 0f, 0f, 0.35f * parentAlpha);
+                Fill.rect(info.x, info.y, layout.width + margin * 2f, layout.height + margin * 2f);
+                Draw.color();
+
+                font.setColor(textColor);
+                font.draw(text, info.x, info.y + layout.height / 2f, 0, Align.center, false);
+            }
+
+            Draw.reset();
+            font.getData().setScale(1f);
+            font.setColor(Color.white);
+            font.setUseIntegerPositions(ints);
+            Pools.free(layout);
         }
     }
 
