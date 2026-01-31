@@ -3,7 +3,7 @@ plugins{
 }
 
 group = "powergridminimap"
-version = "1.3.2"
+version = "1.3.3"
 
 dependencies{
     // Build against this Mindustry source checkout.

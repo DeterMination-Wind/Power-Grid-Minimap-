@@ -36,6 +36,11 @@ import arc.util.Structs;
 import mindustry.content.Blocks;
 import mindustry.core.UI;
 import mindustry.game.EventType.ClientLoadEvent;
+import mindustry.game.EventType.BlockBuildEndEvent;
+import mindustry.game.EventType.BlockDestroyEvent;
+import mindustry.game.EventType.BuildRotateEvent;
+import mindustry.game.EventType.BuildTeamChangeEvent;
+import mindustry.game.EventType.ConfigEvent;
 import mindustry.game.EventType.WorldLoadEvent;
 import mindustry.game.EventType.Trigger;
 import mindustry.graphics.Drawf;
@@ -116,7 +121,15 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             Time.runTask(10f, this::ensureOverlayAttached);
         });
 
+        Events.on(BlockBuildEndEvent.class, e -> cache.invalidateAll());
+        Events.on(BlockDestroyEvent.class, e -> cache.invalidateAll());
+        Events.on(BuildRotateEvent.class, e -> cache.invalidateAll());
+        Events.on(BuildTeamChangeEvent.class, e -> cache.invalidateAll());
+        Events.on(ConfigEvent.class, e -> cache.invalidateAll());
+
         Events.run(Trigger.update, () -> {
+            if(!Core.settings.getBool(keyEnabled, true)) return;
+
             //the HUD may be rebuilt; keep trying to attach.
             if(Time.time >= nextAttachAttempt){
                 nextAttachAttempt = Time.time + 60f;
@@ -840,13 +853,45 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
 
     private static class PowerGridCache{
         private static final float updateInterval = 30f;
+        private static final float fullUpdateMinInterval = 60f;
 
         private final ObjectSet<PowerGraph> graphs = new ObjectSet<>();
         private final Seq<GridInfo> grids = new Seq<>();
         private final Seq<MarkerInfo> markers = new Seq<>();
         private final Seq<MarkerRectInfo> markerRects = new Seq<>();
 
+        //object pools to reduce allocations/GC
+        private final Seq<MarkerInfo> markerPool = new Seq<>();
+        private int markerPoolUsed = 0;
+        private final Seq<MarkerRectInfo> rectPool = new Seq<>();
+        private int rectPoolUsed = 0;
+        private final Seq<ClusterInfo> clusterPool = new Seq<>();
+        private int clusterPoolUsed = 0;
+
+        //reused scratch objects for clustering
+        private final IntSet tmpOccupied = new IntSet();
+        private final IntSeq tmpOccupiedList = new IntSeq();
+        private final IntSet tmpVisited = new IntSet();
+        private final IntQueue tmpQueue = new IntQueue();
+        private final Seq<ClusterInfo> tmpClusters = new Seq<>();
+
+        //reused scratch arrays for MST/partitioning (clusters are capped)
+        private static final int maxMarkersPerGraph = 64;
+        private final int[] mstParent = new int[maxMarkersPerGraph];
+        private final float[] mstParentW = new float[maxMarkersPerGraph];
+        private final boolean[] mstUsed = new boolean[maxMarkersPerGraph];
+        private final float[] mstBest = new float[maxMarkersPerGraph];
+        private final boolean[] mstCompVisited = new boolean[maxMarkersPerGraph];
+        private final IntSeq[] mstAdj = new IntSeq[maxMarkersPerGraph];
+        {
+            for(int i = 0; i < mstAdj.length; i++){
+                mstAdj[i] = new IntSeq();
+            }
+        }
+
         private float nextUpdateTime = 0f;
+        private boolean basicDirty = true;
+        private boolean fullDirty = true;
 
         //fullscreen overlay cache
         private float nextFullUpdateTime = 0f;
@@ -856,6 +901,22 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
         private int lastGridAlpha = -1;
         private int lastWorldW = -1, lastWorldH = -1;
 
+        //reused scratch arrays for full overlay rebuild
+        private int lastTileCount = -1;
+        private int[] tmpOwnerPower;
+        private int[] tmpOwnerClaim;
+        private int[] tmpOverlayOwner;
+        private boolean[] tmpClaimedBuild;
+        private boolean[] tmpVisitedTiles;
+        private short[] tmpDist;
+        private int[] tmpOwnerNear;
+        private boolean[] tmpAssigned;
+        private final Seq<mindustry.gen.Building> tmpNonPower = new Seq<>();
+        private final IntSeq tmpTiles = new IntSeq();
+        private final IntSeq tmpComp = new IntSeq();
+        private final IntQueue tmpBfs = new IntQueue();
+        private final int[] tmpNeighborGrids = new int[8];
+
         public void clear(){
             graphs.clear();
             grids.clear();
@@ -863,6 +924,8 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             markerRects.clear();
             nextUpdateTime = 0f;
             nextFullUpdateTime = 0f;
+            basicDirty = true;
+            fullDirty = true;
 
             if(fullOverlayPixmap != null){
                 fullOverlayPixmap.dispose();
@@ -875,6 +938,23 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             lastClaimDistance = -1;
             lastGridAlpha = -1;
             lastWorldW = lastWorldH = -1;
+
+            lastTileCount = -1;
+            tmpOwnerPower = null;
+            tmpOwnerClaim = null;
+            tmpOverlayOwner = null;
+            tmpClaimedBuild = null;
+            tmpVisitedTiles = null;
+            tmpDist = null;
+            tmpOwnerNear = null;
+            tmpAssigned = null;
+        }
+
+        public void invalidateAll(){
+            basicDirty = true;
+            fullDirty = true;
+            nextUpdateTime = 0f;
+            nextFullUpdateTime = 0f;
         }
 
         public void updateBasic(){
@@ -883,13 +963,22 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
                 return;
             }
 
-            if(Time.time < nextUpdateTime) return;
+            if(!basicDirty && Time.time < nextUpdateTime) return;
+            if(!basicDirty && Time.time >= nextUpdateTime){
+                // If nothing invalidated the cache, avoid rescanning the whole map repeatedly.
+                nextUpdateTime = Time.time + updateInterval * 6f;
+                return;
+            }
+
             nextUpdateTime = Time.time + updateInterval;
+            basicDirty = false;
 
             graphs.clear();
             grids.clear();
             markers.clear();
             markerRects.clear();
+            markerPoolUsed = 0;
+            rectPoolUsed = 0;
 
             for(int i = 0; i < mindustry.gen.Groups.build.size(); i++){
                 mindustry.gen.Building build = mindustry.gen.Groups.build.index(i);
@@ -914,8 +1003,8 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             info.colorKey = graph.getID();
 
             //Collect occupied tiles (all linked tiles for each building) for this graph.
-            IntSet occupied = new IntSet();
-            IntSeq occupiedList = new IntSeq();
+            tmpOccupied.clear();
+            tmpOccupiedList.clear();
 
             Seq<mindustry.gen.Building> all = graph.all;
             for(int i = 0; i < all.size; i++){
@@ -923,19 +1012,19 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
                 if(b == null || b.team != player.team() || b.tile == null) continue;
                 b.tile.getLinkedTiles(t -> {
                     int pos = t.pos();
-                    if(!occupied.contains(pos)){
-                        occupied.add(pos);
-                        occupiedList.add(pos);
+                    if(!tmpOccupied.contains(pos)){
+                        tmpOccupied.add(pos);
+                        tmpOccupiedList.add(pos);
                     }
                 });
             }
 
-            if(occupiedList.isEmpty()) return;
+            if(tmpOccupiedList.isEmpty()) return;
 
             //stable color key: minimum occupied tile position (stable across minimap opens)
             int minPos = Integer.MAX_VALUE;
-            for(int i = 0; i < occupiedList.size; i++){
-                int p = occupiedList.get(i);
+            for(int i = 0; i < tmpOccupiedList.size; i++){
+                int p = tmpOccupiedList.get(i);
                 if(p < minPos) minPos = p;
             }
             if(minPos != Integer.MAX_VALUE){
@@ -945,29 +1034,35 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             //Flood-fill connected components on the tile grid, using 4-neighbor adjacency.
             //If clusters are close together (< threshold tiles), draw a single marker at the whole-graph center.
             //If clusters are far apart (> threshold tiles), draw one marker per cluster.
-            IntSet visited = new IntSet();
-            IntQueue q = new IntQueue();
             int maxMarkersPerGraph = 64;
 
-            Seq<ClusterInfo> clusters = new Seq<>();
+            tmpVisited.clear();
+            tmpQueue.clear();
+            tmpClusters.clear();
+            clusterPoolUsed = 0;
             float totalSumX = 0f, totalSumY = 0f;
             int totalCount = 0;
 
-            for(int i = 0; i < occupiedList.size; i++){
-                int start = occupiedList.get(i);
-                if(visited.contains(start)) continue;
+            for(int i = 0; i < tmpOccupiedList.size; i++){
+                int start = tmpOccupiedList.get(i);
+                if(tmpVisited.contains(start)) continue;
 
-                ClusterInfo cluster = new ClusterInfo();
+                ClusterInfo cluster = clusterPoolUsed < clusterPool.size ? clusterPool.get(clusterPoolUsed) : new ClusterInfo();
+                if(clusterPoolUsed >= clusterPool.size) clusterPool.add(cluster);
+                clusterPoolUsed++;
                 cluster.minx = Integer.MAX_VALUE;
                 cluster.miny = Integer.MAX_VALUE;
                 cluster.maxx = Integer.MIN_VALUE;
                 cluster.maxy = Integer.MIN_VALUE;
+                cluster.sumX = 0f;
+                cluster.sumY = 0f;
+                cluster.count = 0;
 
-                visited.add(start);
-                q.addLast(start);
+                tmpVisited.add(start);
+                tmpQueue.addLast(start);
 
-                while(q.size > 0){
-                    int cur = q.removeFirst();
+                while(tmpQueue.size > 0){
+                    int cur = tmpQueue.removeFirst();
                     int x = Point2.x(cur);
                     int y = Point2.y(cur);
 
@@ -982,13 +1077,13 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
 
                     int n;
                     n = Point2.pack(x + 1, y);
-                    if(x + 1 < world.width() && occupied.contains(n) && !visited.contains(n)){ visited.add(n); q.addLast(n); }
+                    if(x + 1 < world.width() && tmpOccupied.contains(n) && !tmpVisited.contains(n)){ tmpVisited.add(n); tmpQueue.addLast(n); }
                     n = Point2.pack(x - 1, y);
-                    if(x - 1 >= 0 && occupied.contains(n) && !visited.contains(n)){ visited.add(n); q.addLast(n); }
+                    if(x - 1 >= 0 && tmpOccupied.contains(n) && !tmpVisited.contains(n)){ tmpVisited.add(n); tmpQueue.addLast(n); }
                     n = Point2.pack(x, y + 1);
-                    if(y + 1 < world.height() && occupied.contains(n) && !visited.contains(n)){ visited.add(n); q.addLast(n); }
+                    if(y + 1 < world.height() && tmpOccupied.contains(n) && !tmpVisited.contains(n)){ tmpVisited.add(n); tmpQueue.addLast(n); }
                     n = Point2.pack(x, y - 1);
-                    if(y - 1 >= 0 && occupied.contains(n) && !visited.contains(n)){ visited.add(n); q.addLast(n); }
+                    if(y - 1 >= 0 && tmpOccupied.contains(n) && !tmpVisited.contains(n)){ tmpVisited.add(n); tmpQueue.addLast(n); }
                 }
 
                 if(cluster.count <= 0) continue;
@@ -997,21 +1092,21 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
                 totalSumY += cluster.sumY;
                 totalCount += cluster.count;
 
-                clusters.add(cluster);
-                if(clusters.size >= maxMarkersPerGraph){
+                tmpClusters.add(cluster);
+                if(tmpClusters.size >= maxMarkersPerGraph){
                     //Avoid UI spam/perf issues on extreme maps.
                     break;
                 }
             }
 
-            if(clusters.isEmpty() || totalCount <= 0) return;
+            if(tmpClusters.isEmpty() || totalCount <= 0) return;
 
             int thresholdTiles = Core.settings.getInt(keyClusterMarkerDistance, 15);
             //Partition the graph into multiple rectangles using MST cut:
             //- build MST of clusters with bbox-gap as edge weight
             //- cut edges whose weight > thresholdTiles
             //- each connected component becomes a rectangle (bbox union)
-            int n = clusters.size;
+            int n = tmpClusters.size;
             int[] parent = new int[n];
             float[] parentW = new float[n];
             boolean[] used = new boolean[n];
@@ -1038,10 +1133,10 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
                     parentW[v] = vBest;
                 }
 
-                ClusterInfo a = clusters.get(v);
+                ClusterInfo a = tmpClusters.get(v);
                 for(int u = 0; u < n; u++){
                     if(used[u]) continue;
-                    ClusterInfo b = clusters.get(u);
+                    ClusterInfo b = tmpClusters.get(u);
                     float gap = clusterGap(a, b);
                     if(gap < best[u]){
                         best[u] = gap;
@@ -1070,14 +1165,14 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             for(int si = 0; si < n; si++){
                 if(compVisited[si]) continue;
                 compVisited[si] = true;
-                q.clear();
-                q.addLast(si);
+                tmpQueue.clear();
+                tmpQueue.addLast(si);
 
                 int minx = Integer.MAX_VALUE, miny = Integer.MAX_VALUE, maxx = Integer.MIN_VALUE, maxy = Integer.MIN_VALUE;
 
-                while(q.size > 0){
-                    int v = q.removeFirst();
-                    ClusterInfo c = clusters.get(v);
+                while(tmpQueue.size > 0){
+                    int v = tmpQueue.removeFirst();
+                    ClusterInfo c = tmpClusters.get(v);
                     if(c.minx < minx) minx = c.minx;
                     if(c.miny < miny) miny = c.miny;
                     if(c.maxx > maxx) maxx = c.maxx;
@@ -1088,7 +1183,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
                         int to = nei.get(ni);
                         if(compVisited[to]) continue;
                         compVisited[to] = true;
-                        q.addLast(to);
+                        tmpQueue.addLast(to);
                     }
                 }
 
@@ -1099,13 +1194,17 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
                 float ww = (maxx - minx + 1) * tilesize;
                 float wh = (maxy - miny + 1) * tilesize;
 
-                MarkerRectInfo r = new MarkerRectInfo();
+                MarkerRectInfo r = rectPoolUsed < rectPool.size ? rectPool.get(rectPoolUsed) : new MarkerRectInfo();
+                if(rectPoolUsed >= rectPool.size) rectPool.add(r);
+                rectPoolUsed++;
                 r.graph = graph;
                 r.colorKey = info.colorKey;
                 r.worldRect.set(wx, wy, ww, wh);
                 markerRects.add(r);
 
-                MarkerInfo m = new MarkerInfo();
+                MarkerInfo m = markerPoolUsed < markerPool.size ? markerPool.get(markerPoolUsed) : new MarkerInfo();
+                if(markerPoolUsed >= markerPool.size) markerPool.add(m);
+                markerPoolUsed++;
                 m.graph = graph;
                 m.x = wx + ww / 2f;
                 m.y = wy + wh / 2f;
@@ -1145,8 +1244,14 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             boolean sizeChanged = world.width() != lastWorldW || world.height() != lastWorldH;
             boolean settingsChanged = claimDistance != lastClaimDistance || gridAlpha != lastGridAlpha;
 
-            if(!settingsChanged && !sizeChanged && Time.time < nextFullUpdateTime) return;
-            nextFullUpdateTime = Time.time + 60f;
+            if(sizeChanged || settingsChanged){
+                fullDirty = true;
+            }
+
+            if(!fullDirty) return;
+            if(Time.time < nextFullUpdateTime) return;
+            nextFullUpdateTime = Time.time + fullUpdateMinInterval;
+            fullDirty = false;
 
             lastClaimDistance = claimDistance;
             lastGridAlpha = gridAlpha;
@@ -1195,9 +1300,12 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             }
 
             final int tileCount = w * h;
-            int[] ownerPower = new int[tileCount];
+            ensureOverlayScratch(tileCount);
+            int[] ownerPower = tmpOwnerPower;
+            int[] overlayOwner = tmpOverlayOwner;
+            int[] ownerClaim = tmpOwnerClaim;
+            boolean[] claimedBuild = tmpClaimedBuild;
             Arrays.fill(ownerPower, -1);
-            int[] overlayOwner = new int[tileCount];
             Arrays.fill(overlayOwner, -1);
 
             //seed: power-using buildings tiles
@@ -1217,15 +1325,15 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
                 }
             }
 
-            int[] ownerClaim = Arrays.copyOf(ownerPower, ownerPower.length);
-            boolean[] claimedBuild = new boolean[tileCount];
+            System.arraycopy(ownerPower, 0, ownerClaim, 0, tileCount);
             for(int i = 0; i < tileCount; i++){
                 claimedBuild[i] = ownerClaim[i] >= 0;
             }
 
             //rule 1: adjacent non-power buildings join if adjacent to exactly one grid (by power tiles)
             //collect non-power buildings first
-            Seq<mindustry.gen.Building> nonPower = new Seq<>();
+            Seq<mindustry.gen.Building> nonPower = tmpNonPower;
+            nonPower.clear();
             for(int i = 0; i < mindustry.gen.Groups.build.size(); i++){
                 mindustry.gen.Building b = mindustry.gen.Groups.build.index(i);
                 if(b == null || b.team != player.team()) continue;
@@ -1234,9 +1342,9 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
                 nonPower.add(b);
             }
 
-            boolean[] assigned = new boolean[nonPower.size];
-            IntSeq tmpTiles = new IntSeq();
-            int[] neighborGrids = new int[8];
+            boolean[] assigned = ensureAssigned(nonPower.size);
+            IntSeq tmpTiles = this.tmpTiles;
+            int[] neighborGrids = tmpNeighborGrids;
 
             for(int ni = 0; ni < nonPower.size; ni++){
                 mindustry.gen.Building b = nonPower.get(ni);
@@ -1273,11 +1381,12 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
 
             //rule 2: distance BFS from power tiles; non-power buildings within threshold join nearest grid
             if(claimDistance > 0){
-                short[] dist = new short[tileCount];
+                short[] dist = tmpDist;
+                int[] ownerNear = tmpOwnerNear;
                 Arrays.fill(dist, (short)-1);
-                int[] ownerNear = new int[tileCount];
                 Arrays.fill(ownerNear, -1);
-                IntQueue q = new IntQueue();
+                IntQueue q = tmpQueue;
+                q.clear();
 
                 for(int i = 0; i < tileCount; i++){
                     int g = ownerPower[i];
@@ -1326,9 +1435,12 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             }
 
             //rule 4: for each grid, compute boundary+interior fill per connected component and render into pixmap
-            boolean[] visited = new boolean[tileCount];
-            IntQueue bfs = new IntQueue();
-            IntSeq comp = new IntSeq();
+            boolean[] visited = tmpVisitedTiles;
+            Arrays.fill(visited, false);
+            IntQueue bfs = tmpBfs;
+            bfs.clear();
+            IntSeq comp = tmpComp;
+            comp.clear();
 
             float alpha = Mathf.clamp(gridAlphaInt / 100f);
 
@@ -1417,6 +1529,28 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             }
 
             fullOverlayTexture.draw(fullOverlayPixmap);
+        }
+
+        private void ensureOverlayScratch(int tileCount){
+            if(tileCount == lastTileCount && tmpOwnerPower != null) return;
+            lastTileCount = tileCount;
+            tmpOwnerPower = new int[tileCount];
+            tmpOwnerClaim = new int[tileCount];
+            tmpOverlayOwner = new int[tileCount];
+            tmpClaimedBuild = new boolean[tileCount];
+            tmpVisitedTiles = new boolean[tileCount];
+            tmpDist = new short[tileCount];
+            tmpOwnerNear = new int[tileCount];
+            tmpAssigned = new boolean[0];
+        }
+
+        private boolean[] ensureAssigned(int size){
+            if(tmpAssigned == null || tmpAssigned.length < size){
+                tmpAssigned = new boolean[size];
+            }else{
+                Arrays.fill(tmpAssigned, 0, size, false);
+            }
+            return tmpAssigned;
         }
 
         private static int addNeighborGrid(int[] ownerPower, int w, int h, int x, int y, int[] out, int count){
@@ -1552,6 +1686,14 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
         private final IntMap<Float> lastSplitTime = new IntMap<>();
         private final IntMap<PendingSplit> pendingSplits = new IntMap<>();
 
+        //reused temp structures to reduce GC pressure
+        private final IntMap<IntSet> prevToNew = new IntMap<>();
+        private final IntMap<Float> currentPowerIn = new IntMap<>();
+        private final IntMap<Float> currentBalance = new IntMap<>();
+        private final IntSet currentIds = new IntSet();
+        private final IntSet tmpResultIds = new IntSet();
+        private final IntSeq tmpToRemove = new IntSeq();
+
         private float nextScan = 0f;
 
         void update(){
@@ -1570,10 +1712,14 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             int windowSeconds = Core.settings.getInt(keySplitAlertWindowSeconds, 4);
             float windowFrames = Math.max(1f, windowSeconds) * 60f;
 
-            IntMap<IntSet> prevToNew = new IntMap<>();
-            IntMap<Float> currentPowerIn = new IntMap<>();
-            IntMap<Float> currentBalance = new IntMap<>();
-            IntSet currentIds = new IntSet();
+            //clear temp maps; reuse IntSet instances stored in prevToNew
+            for(IntMap.Entry<IntSet> e : prevToNew){
+                if(e.value != null) e.value.clear();
+            }
+            prevToNew.clear();
+            currentPowerIn.clear();
+            currentBalance.clear();
+            currentIds.clear();
 
             //scan all player buildings with power modules
             for(int i = 0; i < mindustry.gen.Groups.build.size(); i++){
@@ -1607,12 +1753,12 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
                 IntSet changedIds = e.value;
 
                 //result set = changed graph IDs + (prevId if it still exists after the split)
-                IntSet resultIds = new IntSet();
-                changedIds.each(resultIds::add);
+                tmpResultIds.clear();
+                if(changedIds != null) changedIds.each(tmpResultIds::add);
                 if(currentIds.contains(prevId)){
-                    resultIds.add(prevId);
+                    tmpResultIds.add(prevId);
                 }
-                if(resultIds.size < 2) continue;
+                if(tmpResultIds.size < 2) continue;
 
                 float prevPowerIn = lastGraphPowerIn.get(prevId, 0f);
                 if(prevPowerIn < threshold) continue;
@@ -1627,22 +1773,22 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
                     pending.createdAt = Time.time;
                     pending.expiresAt = Time.time + windowFrames;
                     pending.resultIds.clear();
-                    resultIds.each(pending.resultIds::add);
+                    tmpResultIds.each(pending.resultIds::add);
                     pendingSplits.put(prevId, pending);
                 }else{
                     //keep original window; just widen the set of resulting IDs
-                    resultIds.each(pending.resultIds::add);
+                    tmpResultIds.each(pending.resultIds::add);
                 }
             }
 
             //evaluate pending split windows; if any resulting grid goes negative within the window, fire alert
-            IntSeq toRemove = new IntSeq();
+            tmpToRemove.clear();
             for(IntMap.Entry<PendingSplit> e : pendingSplits){
                 PendingSplit pending = e.value;
                 if(pending == null) continue;
 
                 if(Time.time > pending.expiresAt){
-                    toRemove.add(pending.prevId);
+                    tmpToRemove.add(pending.prevId);
                     continue;
                 }
 
@@ -1696,11 +1842,11 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
                 if(reconnect != null){
                     lastSplitTime.put(pending.prevId, Time.time);
                     alert.trigger(aId, bId, reconnect.midX, reconnect.midY, reconnect.ax, reconnect.ay, reconnect.bx, reconnect.by);
-                    toRemove.add(pending.prevId);
+                    tmpToRemove.add(pending.prevId);
                 }
             }
-            for(int i = 0; i < toRemove.size; i++){
-                pendingSplits.remove(toRemove.get(i));
+            for(int i = 0; i < tmpToRemove.size; i++){
+                pendingSplits.remove(tmpToRemove.get(i));
             }
 
             //store last stats
