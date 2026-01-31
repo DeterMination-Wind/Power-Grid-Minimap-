@@ -475,8 +475,16 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             Pools.free(layout);
         }
 
-        private static Color colorForGraph(int id, Color out){
-            float hue = (id * 0.61803398875f) % 1f;
+        private static Color colorForGraph(int key, Color out){
+            //Use integer hashing to avoid float precision issues with large packed tile positions.
+            int h = key;
+            h ^= (h >>> 16);
+            h *= 0x7feb352d;
+            h ^= (h >>> 15);
+            h *= 0x846ca68b;
+            h ^= (h >>> 16);
+
+            float hue = (h & 0x00ffffff) / (float)0x01000000; // [0, 1)
             out.fromHsv(hue * 360f, 0.65f, 1f);
             return out;
         }
