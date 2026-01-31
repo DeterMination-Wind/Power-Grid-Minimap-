@@ -26,6 +26,7 @@ import arc.util.Log;
 import arc.graphics.Pixmap;
 import arc.graphics.Texture;
 import arc.graphics.g2d.TextureRegion;
+import arc.math.geom.Vec2;
 import arc.struct.IntIntMap;
 import arc.struct.IntMap;
 import arc.struct.IntQueue;
@@ -81,6 +82,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
 
     private final SplitWatcher splitWatcher = new SplitWatcher();
     private final SplitAlert alert = new SplitAlert();
+    private final MindustryXMarkers xMarkers = new MindustryXMarkers();
 
     public PowerGridMinimapMod(){
         Events.on(ClientLoadEvent.class, e -> {
@@ -99,6 +101,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             registerSettings();
             refreshMarkerColor();
             refreshReconnectColor();
+            xMarkers.tryInit();
             Time.runTask(10f, this::ensureOverlayAttached);
         });
 
@@ -1209,6 +1212,11 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             if(ui != null && ui.hudfrag != null){
                 ui.hudfrag.showToast("[scarlet]" + Core.bundle.get("pgmm.toast.disconnected") + "[]");
             }
+
+            //MindustryX integration: add a map mark with tile coordinates (no-op on vanilla).
+            int tileX = Mathf.clamp((int)(midWorldX / tilesize), 0, world.width() - 1);
+            int tileY = Mathf.clamp((int)(midWorldY / tilesize), 0, world.height() - 1);
+            xMarkers.markReconnect(tileX, tileY);
         }
 
         void drawHudMinimapMarker(float invScale, Rect viewRect){
@@ -1600,5 +1608,39 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
     private static class ReconnectResult{
         float midX, midY;
         float ax, ay, bx, by;
+    }
+
+    /** Optional integration with MindustryX "mark" feature. Uses reflection so vanilla builds won't crash. */
+    private static class MindustryXMarkers{
+        private boolean initialized = false;
+        private boolean available = false;
+        private java.lang.reflect.Method newMarkFromChat;
+
+        void tryInit(){
+            if(initialized) return;
+            initialized = true;
+            try{
+                Class<?> markerType = Class.forName("mindustryX.features.MarkerType");
+                // public static void newMarkFromChat(String text, Vec2 pos)
+                newMarkFromChat = markerType.getMethod("newMarkFromChat", String.class, Vec2.class);
+                available = true;
+                Log.info("PGMM: MindustryX marker API detected.");
+            }catch(Throwable ignored){
+                available = false;
+            }
+        }
+
+        void markReconnect(int tileX, int tileY){
+            if(!available || newMarkFromChat == null) return;
+            try{
+                //MindustryX FormatDefault.formatTile expects world coords; its newMarkFromChat scales tile coords by tilesize internally.
+                String text = "[orange]PGMM[] (" + tileX + "," + tileY + ")";
+                newMarkFromChat.invoke(null, text, new Vec2(tileX, tileY));
+            }catch(Throwable t){
+                //Disable after first failure to avoid spam.
+                available = false;
+                Log.err("PGMM: MindustryX marker call failed; disabling integration.", t);
+            }
+        }
     }
 }
