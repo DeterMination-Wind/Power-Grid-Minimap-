@@ -146,24 +146,11 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             arc.scene.ui.CheckBox mi2Box = new arc.scene.ui.CheckBox(Core.bundle.get("setting." + keyDrawOnMi2Minimap + ".name", "Draw on MI2 minimap"));
             ui.addDescTooltip(mi2Box, Core.bundle.getOrNull("setting." + keyDrawOnMi2Minimap + ".description"));
             mi2Box.changed(() -> {
-                if(mi2.isAvailable()){
-                    Core.settings.put(keyDrawOnMi2Minimap, mi2Box.isChecked());
-                    mi2.ensureAttached(cache, markerColor, alert);
-                }else{
-                    mi2Box.setChecked(false);
-                    Core.settings.put(keyDrawOnMi2Minimap, false);
-                }
+                Core.settings.put(keyDrawOnMi2Minimap, mi2Box.isChecked());
+                //If MI2 exists, attach/detach immediately; otherwise, no-op.
+                mi2.ensureAttached(cache, markerColor, alert);
             });
-            mi2Box.update(() -> {
-                boolean avail = mi2.isAvailable();
-                mi2Box.setDisabled(!avail);
-                if(!avail){
-                    mi2Box.setChecked(false);
-                    Core.settings.put(keyDrawOnMi2Minimap, false);
-                }else{
-                    mi2Box.setChecked(Core.settings.getBool(keyDrawOnMi2Minimap, false));
-                }
-            });
+            mi2Box.update(() -> mi2Box.setChecked(Core.settings.getBool(keyDrawOnMi2Minimap, false)));
             table.add(mi2Box).left().padTop(3f);
             table.row();
 
