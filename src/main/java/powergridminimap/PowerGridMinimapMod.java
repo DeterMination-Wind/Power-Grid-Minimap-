@@ -1634,7 +1634,8 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             if(!available || newMarkFromChat == null) return;
             try{
                 //MindustryX FormatDefault.formatTile expects world coords; its newMarkFromChat scales tile coords by tilesize internally.
-                String text = "[orange]PGMM[] (" + tileX + "," + tileY + ")";
+                String label = Core.bundle.get("pgmm.mark.reconnect", "Reconnect point");
+                String text = "[orange]" + label + "[] (" + tileX + "," + tileY + ")";
                 newMarkFromChat.invoke(null, text, new Vec2(tileX, tileY));
             }catch(Throwable t){
                 //Disable after first failure to avoid spam.
