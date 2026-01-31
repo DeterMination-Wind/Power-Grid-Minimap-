@@ -62,6 +62,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
     private static final String keyClaimDistance = "pgmm-claimdistance";
     private static final String keySplitAlertThreshold = "pgmm-splitalertthreshold";
     private static final String keySplitAlertWindowSeconds = "pgmm-splitwindow";
+    private static final String keyClusterMarkerDistance = "pgmm-clustermarkerdistance";
     private static final String keyReconnectStroke = "pgmm-markerstroke";
     private static final String keyReconnectColor = "pgmm-markerlinecolor";
 
@@ -89,6 +90,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             Core.settings.defaults(keyClaimDistance, 5);
             Core.settings.defaults(keySplitAlertThreshold, 10000);
             Core.settings.defaults(keySplitAlertWindowSeconds, 4);
+            Core.settings.defaults(keyClusterMarkerDistance, 15);
             Core.settings.defaults(keyReconnectStroke, 2);
             Core.settings.defaults(keyReconnectColor, "ffa500");
 
@@ -128,6 +130,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             table.sliderPref(keyClaimDistance, 5, 1, 20, 1, v -> v + "");
             table.sliderPref(keySplitAlertThreshold, 10000, 1000, 50000, 500, v -> v + "/s");
             table.sliderPref(keySplitAlertWindowSeconds, 4, 1, 15, 1, v -> v + "s");
+            table.sliderPref(keyClusterMarkerDistance, 15, 0, 60, 1, v -> v + "");
             table.sliderPref(keyReconnectStroke, 2, 1, 8, 1, v -> v + "");
             table.textPref(keyReconnectColor, "ffa500", v -> refreshReconnectColor());
         });
@@ -607,16 +610,25 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             if(occupiedList.isEmpty()) return;
 
             //Flood-fill connected components on the tile grid, using 4-neighbor adjacency.
+            //If clusters are close together (< threshold tiles), draw a single marker at the whole-graph center.
+            //If clusters are far apart (> threshold tiles), draw one marker per cluster.
             IntSet visited = new IntSet();
             IntQueue q = new IntQueue();
             int maxMarkersPerGraph = 64;
+
+            Seq<ClusterInfo> clusters = new Seq<>();
+            float totalSumX = 0f, totalSumY = 0f;
+            int totalCount = 0;
 
             for(int i = 0; i < occupiedList.size; i++){
                 int start = occupiedList.get(i);
                 if(visited.contains(start)) continue;
 
-                float sumX = 0f, sumY = 0f;
-                int count = 0;
+                ClusterInfo cluster = new ClusterInfo();
+                cluster.minx = Integer.MAX_VALUE;
+                cluster.miny = Integer.MAX_VALUE;
+                cluster.maxx = Integer.MIN_VALUE;
+                cluster.maxy = Integer.MIN_VALUE;
 
                 visited.add(start);
                 q.addLast(start);
@@ -626,9 +638,14 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
                     int x = Point2.x(cur);
                     int y = Point2.y(cur);
 
-                    sumX += (x + 0.5f) * tilesize;
-                    sumY += (y + 0.5f) * tilesize;
-                    count++;
+                    cluster.sumX += (x + 0.5f) * tilesize;
+                    cluster.sumY += (y + 0.5f) * tilesize;
+                    cluster.count++;
+
+                    if(x < cluster.minx) cluster.minx = x;
+                    if(y < cluster.miny) cluster.miny = y;
+                    if(x > cluster.maxx) cluster.maxx = x;
+                    if(y > cluster.maxy) cluster.maxy = y;
 
                     int n;
                     n = Point2.pack(x + 1, y);
@@ -641,19 +658,73 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
                     if(y - 1 >= 0 && occupied.contains(n) && !visited.contains(n)){ visited.add(n); q.addLast(n); }
                 }
 
-                if(count <= 0) continue;
+                if(cluster.count <= 0) continue;
 
-                MarkerInfo m = new MarkerInfo();
-                m.graph = graph;
-                m.x = sumX / count;
-                m.y = sumY / count;
-                markers.add(m);
+                totalSumX += cluster.sumX;
+                totalSumY += cluster.sumY;
+                totalCount += cluster.count;
 
-                if(markers.size >= maxMarkersPerGraph){
+                clusters.add(cluster);
+                if(clusters.size >= maxMarkersPerGraph){
                     //Avoid UI spam/perf issues on extreme maps.
                     break;
                 }
             }
+
+            if(clusters.isEmpty() || totalCount <= 0) return;
+
+            int thresholdTiles = Core.settings.getInt(keyClusterMarkerDistance, 15);
+            boolean perCluster;
+            if(thresholdTiles <= 0){
+                perCluster = clusters.size > 1;
+            }else if(clusters.size <= 1){
+                perCluster = false;
+            }else{
+                float maxGap = 0f;
+                for(int i = 0; i < clusters.size; i++){
+                    ClusterInfo a = clusters.get(i);
+                    for(int j = i + 1; j < clusters.size; j++){
+                        ClusterInfo b = clusters.get(j);
+
+                        int dx = 0;
+                        if(a.maxx < b.minx) dx = b.minx - a.maxx - 1;
+                        else if(b.maxx < a.minx) dx = a.minx - b.maxx - 1;
+
+                        int dy = 0;
+                        if(a.maxy < b.miny) dy = b.miny - a.maxy - 1;
+                        else if(b.maxy < a.miny) dy = a.miny - b.maxy - 1;
+
+                        float gap = Mathf.dst(0f, 0f, dx, dy);
+                        if(gap > maxGap) maxGap = gap;
+                    }
+                }
+                perCluster = maxGap > thresholdTiles;
+            }
+
+            if(!perCluster){
+                MarkerInfo m = new MarkerInfo();
+                m.graph = graph;
+                m.x = totalSumX / totalCount;
+                m.y = totalSumY / totalCount;
+                markers.add(m);
+                return;
+            }
+
+            for(int i = 0; i < clusters.size; i++){
+                ClusterInfo c = clusters.get(i);
+                if(c.count <= 0) continue;
+                MarkerInfo m = new MarkerInfo();
+                m.graph = graph;
+                m.x = c.sumX / c.count;
+                m.y = c.sumY / c.count;
+                markers.add(m);
+            }
+        }
+
+        private static class ClusterInfo{
+            float sumX, sumY;
+            int count;
+            int minx, miny, maxx, maxy;
         }
 
         public void updateFullOverlay(){
