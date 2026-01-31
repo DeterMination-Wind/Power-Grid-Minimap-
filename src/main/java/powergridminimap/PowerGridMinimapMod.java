@@ -221,6 +221,22 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
         Draw.trans(fullTransform);
 
         Rect viewRect = Tmp.r2.set(0f, 0f, world.unitWidth(), world.unitHeight());
+
+        //fill marker rectangles with a light color (world-coordinates transform)
+        if(!cache.markerRects.isEmpty()){
+            float alpha = Mathf.clamp(Core.settings.getInt(keyGridAlpha, 40) / 100f) * 0.12f;
+            for(int i = 0; i < cache.markerRects.size; i++){
+                MarkerRectInfo r = cache.markerRects.get(i);
+                if(r.graph == null) continue;
+                if(!viewRect.overlaps(r.worldRect)) continue;
+                Color base = MinimapOverlay.colorForGraph(r.colorKey, Tmp.c1);
+                Color light = Tmp.c2.set(base).lerp(Color.white, 0.75f);
+                Draw.color(light.r, light.g, light.b, alpha);
+                Fill.rect(r.worldRect.x + r.worldRect.width / 2f, r.worldRect.y + r.worldRect.height / 2f, r.worldRect.width, r.worldRect.height);
+            }
+            Draw.color();
+        }
+
         drawBalanceMarkersOnFullMap(viewRect, invScale);
 
         //reconnect marker on top
@@ -379,11 +395,25 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             if(player == null) return;
 
             for(int i = 0; i < cache.grids.size; i++){
-                PowerGraph graph = cache.grids.get(i).graph;
+                GridInfo gi = cache.grids.get(i);
+                PowerGraph graph = gi.graph;
                 if(graph == null || graph.all == null || graph.all.isEmpty()) continue;
 
-                Color c = colorForGraph(graph.getID(), Tmp.c1);
-                Draw.color(c.r, c.g, c.b, alpha);
+                Color base = colorForGraph(gi.colorKey, Tmp.c1);
+                Color light = Tmp.c2.set(base).lerp(Color.white, 0.75f);
+                float lightAlpha = alpha * 0.22f;
+
+                //fill marker rectangles with a light color to show the grid area approximation
+                Draw.color(light.r, light.g, light.b, lightAlpha);
+                for(int ri = 0; ri < cache.markerRects.size; ri++){
+                    MarkerRectInfo r = cache.markerRects.get(ri);
+                    if(r.graph != graph) continue;
+                    if(!viewRect.overlaps(r.worldRect)) continue;
+                    Fill.rect(r.worldRect.x + r.worldRect.width / 2f, r.worldRect.y + r.worldRect.height / 2f, r.worldRect.width, r.worldRect.height);
+                }
+
+                //draw buildings on top in the base color
+                Draw.color(base.r, base.g, base.b, alpha);
 
                 Seq<mindustry.gen.Building> all = graph.all;
                 for(int j = 0; j < all.size; j++){
@@ -454,11 +484,18 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
 
     private static class GridInfo{
         PowerGraph graph;
+        int colorKey;
     }
 
     private static class MarkerInfo{
         PowerGraph graph;
         float x, y;
+    }
+
+    private static class MarkerRectInfo{
+        PowerGraph graph;
+        int colorKey;
+        final Rect worldRect = new Rect();
     }
 
     private static class FullMinimapAccess{
@@ -526,6 +563,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
         private final ObjectSet<PowerGraph> graphs = new ObjectSet<>();
         private final Seq<GridInfo> grids = new Seq<>();
         private final Seq<MarkerInfo> markers = new Seq<>();
+        private final Seq<MarkerRectInfo> markerRects = new Seq<>();
 
         private float nextUpdateTime = 0f;
 
@@ -541,6 +579,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             graphs.clear();
             grids.clear();
             markers.clear();
+            markerRects.clear();
             nextUpdateTime = 0f;
             nextFullUpdateTime = 0f;
 
@@ -569,6 +608,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             graphs.clear();
             grids.clear();
             markers.clear();
+            markerRects.clear();
 
             for(int i = 0; i < mindustry.gen.Groups.build.size(); i++){
                 mindustry.gen.Building build = mindustry.gen.Groups.build.index(i);
@@ -583,12 +623,14 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
                 grids.add(info);
 
                 //For sparse laser-linked grids, render one balance marker per contiguous "chunk" of buildings.
-                addClusterMarkers(graph);
+                addClusterMarkers(info);
             }
         }
 
-        private void addClusterMarkers(PowerGraph graph){
+        private void addClusterMarkers(GridInfo info){
+            PowerGraph graph = info.graph;
             if(graph == null || graph.all == null || graph.all.isEmpty()) return;
+            info.colorKey = graph.getID();
 
             //Collect occupied tiles (all linked tiles for each building) for this graph.
             IntSet occupied = new IntSet();
@@ -608,6 +650,16 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             }
 
             if(occupiedList.isEmpty()) return;
+
+            //stable color key: minimum occupied tile position (stable across minimap opens)
+            int minPos = Integer.MAX_VALUE;
+            for(int i = 0; i < occupiedList.size; i++){
+                int p = occupiedList.get(i);
+                if(p < minPos) minPos = p;
+            }
+            if(minPos != Integer.MAX_VALUE){
+                info.colorKey = minPos;
+            }
 
             //Flood-fill connected components on the tile grid, using 4-neighbor adjacency.
             //If clusters are close together (< threshold tiles), draw a single marker at the whole-graph center.
@@ -674,75 +726,111 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             if(clusters.isEmpty() || totalCount <= 0) return;
 
             int thresholdTiles = Core.settings.getInt(keyClusterMarkerDistance, 15);
-            boolean perCluster;
-            if(thresholdTiles <= 0){
-                perCluster = clusters.size > 1;
-            }else if(clusters.size <= 1){
-                perCluster = false;
-            }else{
-                //If clusters are chained close together (e.g. a long line of nodes), do NOT split markers.
-                //Use the maximum edge length in a minimum spanning tree (MST) as "largest gap".
-                int n = clusters.size;
-                boolean[] used = new boolean[n];
-                float[] best = new float[n];
-                Arrays.fill(best, Float.POSITIVE_INFINITY);
-                best[0] = 0f;
+            //Partition the graph into multiple rectangles using MST cut:
+            //- build MST of clusters with bbox-gap as edge weight
+            //- cut edges whose weight > thresholdTiles
+            //- each connected component becomes a rectangle (bbox union)
+            int n = clusters.size;
+            int[] parent = new int[n];
+            float[] parentW = new float[n];
+            boolean[] used = new boolean[n];
+            float[] best = new float[n];
+            Arrays.fill(parent, -1);
+            Arrays.fill(parentW, 0f);
+            Arrays.fill(best, Float.POSITIVE_INFINITY);
+            best[0] = 0f;
 
-                float maxMstEdge = 0f;
-
-                for(int iter = 0; iter < n; iter++){
-                    int v = -1;
-                    float vBest = Float.POSITIVE_INFINITY;
-                    for(int i = 0; i < n; i++){
-                        if(used[i]) continue;
-                        float d = best[i];
-                        if(d < vBest){
-                            vBest = d;
-                            v = i;
-                        }
+            for(int iter = 0; iter < n; iter++){
+                int v = -1;
+                float vBest = Float.POSITIVE_INFINITY;
+                for(int i = 0; i < n; i++){
+                    if(used[i]) continue;
+                    float d = best[i];
+                    if(d < vBest){
+                        vBest = d;
+                        v = i;
                     }
-                    if(v == -1) break;
-                    used[v] = true;
-                    if(vBest > maxMstEdge) maxMstEdge = vBest;
+                }
+                if(v == -1) break;
+                used[v] = true;
+                if(iter != 0){
+                    parentW[v] = vBest;
+                }
 
-                    ClusterInfo a = clusters.get(v);
-                    for(int u = 0; u < n; u++){
-                        if(used[u]) continue;
-                        ClusterInfo b = clusters.get(u);
+                ClusterInfo a = clusters.get(v);
+                for(int u = 0; u < n; u++){
+                    if(used[u]) continue;
+                    ClusterInfo b = clusters.get(u);
+                    float gap = clusterGap(a, b);
+                    if(gap < best[u]){
+                        best[u] = gap;
+                        parent[u] = v;
+                    }
+                }
+            }
 
-                        int dx = 0;
-                        if(a.maxx < b.minx) dx = b.minx - a.maxx - 1;
-                        else if(b.maxx < a.minx) dx = a.minx - b.maxx - 1;
+            //build adjacency from MST edges that pass the threshold (or all edges if threshold <= 0)
+            IntSeq[] adj = new IntSeq[n];
+            for(int i = 0; i < n; i++){
+                adj[i] = new IntSeq();
+            }
+            for(int i = 1; i < n; i++){
+                int p = parent[i];
+                if(p < 0) continue;
+                float w = parentW[i];
+                if(thresholdTiles > 0 && w > thresholdTiles) continue;
+                adj[i].add(p);
+                adj[p].add(i);
+            }
 
-                        int dy = 0;
-                        if(a.maxy < b.miny) dy = b.miny - a.maxy - 1;
-                        else if(b.maxy < a.miny) dy = a.miny - b.maxy - 1;
+            boolean[] compVisited = new boolean[n];
+            int maxRectsPerGraph = 64;
 
-                        float gap = Mathf.dst(0f, 0f, dx, dy);
-                        if(gap < best[u]) best[u] = gap;
+            for(int si = 0; si < n; si++){
+                if(compVisited[si]) continue;
+                compVisited[si] = true;
+                q.clear();
+                q.addLast(si);
+
+                int minx = Integer.MAX_VALUE, miny = Integer.MAX_VALUE, maxx = Integer.MIN_VALUE, maxy = Integer.MIN_VALUE;
+
+                while(q.size > 0){
+                    int v = q.removeFirst();
+                    ClusterInfo c = clusters.get(v);
+                    if(c.minx < minx) minx = c.minx;
+                    if(c.miny < miny) miny = c.miny;
+                    if(c.maxx > maxx) maxx = c.maxx;
+                    if(c.maxy > maxy) maxy = c.maxy;
+
+                    IntSeq nei = adj[v];
+                    for(int ni = 0; ni < nei.size; ni++){
+                        int to = nei.get(ni);
+                        if(compVisited[to]) continue;
+                        compVisited[to] = true;
+                        q.addLast(to);
                     }
                 }
 
-                perCluster = maxMstEdge > thresholdTiles;
-            }
+                if(minx == Integer.MAX_VALUE || miny == Integer.MAX_VALUE) continue;
 
-            if(!perCluster){
+                float wx = minx * tilesize;
+                float wy = miny * tilesize;
+                float ww = (maxx - minx + 1) * tilesize;
+                float wh = (maxy - miny + 1) * tilesize;
+
+                MarkerRectInfo r = new MarkerRectInfo();
+                r.graph = graph;
+                r.colorKey = info.colorKey;
+                r.worldRect.set(wx, wy, ww, wh);
+                markerRects.add(r);
+
                 MarkerInfo m = new MarkerInfo();
                 m.graph = graph;
-                m.x = totalSumX / totalCount;
-                m.y = totalSumY / totalCount;
+                m.x = wx + ww / 2f;
+                m.y = wy + wh / 2f;
                 markers.add(m);
-                return;
-            }
 
-            for(int i = 0; i < clusters.size; i++){
-                ClusterInfo c = clusters.get(i);
-                if(c.count <= 0) continue;
-                MarkerInfo m = new MarkerInfo();
-                m.graph = graph;
-                m.x = c.sumX / c.count;
-                m.y = c.sumY / c.count;
-                markers.add(m);
+                if(markerRects.size >= maxRectsPerGraph) break;
             }
         }
 
@@ -750,6 +838,18 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             float sumX, sumY;
             int count;
             int minx, miny, maxx, maxy;
+        }
+
+        private static float clusterGap(ClusterInfo a, ClusterInfo b){
+            int dx = 0;
+            if(a.maxx < b.minx) dx = b.minx - a.maxx - 1;
+            else if(b.maxx < a.minx) dx = a.minx - b.maxx - 1;
+
+            int dy = 0;
+            if(a.maxy < b.miny) dy = b.miny - a.maxy - 1;
+            else if(b.maxy < a.miny) dy = a.miny - b.maxy - 1;
+
+            return Mathf.dst(0f, 0f, dx, dy);
         }
 
         public void updateFullOverlay(){
@@ -952,8 +1052,8 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             float alpha = Mathf.clamp(gridAlphaInt / 100f);
 
             for(int gi = 0; gi < grids.size; gi++){
-                int graphId = grids.get(gi).graph == null ? gi : grids.get(gi).graph.getID();
-                Color base = MinimapOverlay.colorForGraph(graphId, Tmp.c1);
+                GridInfo info = grids.get(gi);
+                Color base = MinimapOverlay.colorForGraph(info.colorKey, Tmp.c1);
                 Color dark = Tmp.c2.set(base).mul(0.55f);
                 Color light = Tmp.c3.set(base).lerp(Color.white, 0.75f);
 
