@@ -680,11 +680,35 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             }else if(clusters.size <= 1){
                 perCluster = false;
             }else{
-                float maxGap = 0f;
-                for(int i = 0; i < clusters.size; i++){
-                    ClusterInfo a = clusters.get(i);
-                    for(int j = i + 1; j < clusters.size; j++){
-                        ClusterInfo b = clusters.get(j);
+                //If clusters are chained close together (e.g. a long line of nodes), do NOT split markers.
+                //Use the maximum edge length in a minimum spanning tree (MST) as "largest gap".
+                int n = clusters.size;
+                boolean[] used = new boolean[n];
+                float[] best = new float[n];
+                Arrays.fill(best, Float.POSITIVE_INFINITY);
+                best[0] = 0f;
+
+                float maxMstEdge = 0f;
+
+                for(int iter = 0; iter < n; iter++){
+                    int v = -1;
+                    float vBest = Float.POSITIVE_INFINITY;
+                    for(int i = 0; i < n; i++){
+                        if(used[i]) continue;
+                        float d = best[i];
+                        if(d < vBest){
+                            vBest = d;
+                            v = i;
+                        }
+                    }
+                    if(v == -1) break;
+                    used[v] = true;
+                    if(vBest > maxMstEdge) maxMstEdge = vBest;
+
+                    ClusterInfo a = clusters.get(v);
+                    for(int u = 0; u < n; u++){
+                        if(used[u]) continue;
+                        ClusterInfo b = clusters.get(u);
 
                         int dx = 0;
                         if(a.maxx < b.minx) dx = b.minx - a.maxx - 1;
@@ -695,10 +719,11 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
                         else if(b.maxy < a.miny) dy = a.miny - b.maxy - 1;
 
                         float gap = Mathf.dst(0f, 0f, dx, dy);
-                        if(gap > maxGap) maxGap = gap;
+                        if(gap < best[u]) best[u] = gap;
                     }
                 }
-                perCluster = maxGap > thresholdTiles;
+
+                perCluster = maxMstEdge > thresholdTiles;
             }
 
             if(!perCluster){
