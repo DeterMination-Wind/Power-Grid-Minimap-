@@ -42,6 +42,7 @@ import mindustry.graphics.Drawf;
 import mindustry.ui.Fonts;
 import mindustry.world.blocks.power.PowerNode;
 import mindustry.world.blocks.power.PowerGraph;
+import mindustry.mod.Mods;
 
 import java.lang.reflect.Field;
 import java.util.Arrays;
@@ -142,24 +143,29 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
 
             //MI2 minimap integration toggle (disabled if MI2 not installed).
             table.row();
-            arc.scene.ui.layout.Cell<arc.scene.ui.CheckBox> mi2Cell = table.check("@setting.pgmm-mi2minimap.name", b -> {
+            arc.scene.ui.CheckBox mi2Box = new arc.scene.ui.CheckBox(Core.bundle.get("setting." + keyDrawOnMi2Minimap + ".name", "Draw on MI2 minimap"));
+            ui.addDescTooltip(mi2Box, Core.bundle.getOrNull("setting." + keyDrawOnMi2Minimap + ".description"));
+            mi2Box.changed(() -> {
                 if(mi2.isAvailable()){
-                    Core.settings.put(keyDrawOnMi2Minimap, b);
+                    Core.settings.put(keyDrawOnMi2Minimap, mi2Box.isChecked());
                     mi2.ensureAttached(cache, markerColor, alert);
                 }else{
+                    mi2Box.setChecked(false);
                     Core.settings.put(keyDrawOnMi2Minimap, false);
-                }
-            }).checked(Core.settings.getBool(keyDrawOnMi2Minimap, false));
-            mi2Cell.update(cb -> {
-                boolean avail = mi2.isAvailable();
-                cb.setDisabled(!avail);
-                if(!avail){
-                    cb.setChecked(false);
-                    Core.settings.put(keyDrawOnMi2Minimap, false);
-                }else{
-                    cb.setChecked(Core.settings.getBool(keyDrawOnMi2Minimap, false));
                 }
             });
+            mi2Box.update(() -> {
+                boolean avail = mi2.isAvailable();
+                mi2Box.setDisabled(!avail);
+                if(!avail){
+                    mi2Box.setChecked(false);
+                    Core.settings.put(keyDrawOnMi2Minimap, false);
+                }else{
+                    mi2Box.setChecked(Core.settings.getBool(keyDrawOnMi2Minimap, false));
+                }
+            });
+            table.add(mi2Box).left().padTop(3f);
+            table.row();
 
             table.sliderPref(keyClaimDistance, 5, 1, 20, 1, v -> v + "");
             table.sliderPref(keySplitAlertThreshold, 10000, 1000, 50000, 500, v -> v + "/s");
@@ -531,6 +537,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
         private boolean initialized = false;
         private boolean available = false;
 
+        private ClassLoader mi2Loader;
         private java.lang.reflect.Field minimapField;
         private java.lang.reflect.Field rectField;
         private java.lang.reflect.Method setRectMethod;
@@ -539,7 +546,22 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             if(initialized) return;
             initialized = true;
             try{
-                Class<?> mm = Class.forName("mi2u.ui.MinimapMindow");
+                //MI2 is a mod -> loaded in a separate classloader; find its loader and load classes through it.
+                Class<?> mm = null;
+                if(mindustry.Vars.mods != null){
+                    for(Mods.LoadedMod mod : mindustry.Vars.mods.list()){
+                        if(mod == null || mod.loader == null) continue;
+                        try{
+                            mm = Class.forName("mi2u.ui.MinimapMindow", false, mod.loader);
+                            mi2Loader = mod.loader;
+                            break;
+                        }catch(Throwable ignored){
+                        }
+                    }
+                }
+                if(mm == null){
+                    throw new ClassNotFoundException("mi2u.ui.MinimapMindow");
+                }
                 minimapField = mm.getField("m"); // public static Minimap2 m
                 Object minimap = minimapField.get(null);
                 if(minimap == null) throw new IllegalStateException("MI2 minimap not initialized");
