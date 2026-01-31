@@ -3,7 +3,7 @@
   "displayName": "电网小地图 / Power Grid Minimap",
   "author": "codex",
   "description": "在小地图/大地图为每个电网着色，并显示电网电力盈亏；支持电网断开告警与建议连接点。\nColor each disconnected power network on the minimap/full map and show its power balance; includes split alerts and reconnect hints.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "minGameVersion": 154,
   "hidden": true,
   "java": true,

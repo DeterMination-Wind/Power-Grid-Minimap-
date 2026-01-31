@@ -59,6 +59,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
     private static final String keyGridAlpha = "pgmm-gridalpha";
     private static final String keyMarkerScale = "pgmm-markerscale";
     private static final String keyMarkerColor = "pgmm-markercolor";
+    private static final String keyHudMarkerFollowScale = "pgmm-hudmarkerscale";
     private static final String keyClaimDistance = "pgmm-claimdistance";
     private static final String keySplitAlertThreshold = "pgmm-splitalertthreshold";
     private static final String keySplitAlertWindowSeconds = "pgmm-splitwindow";
@@ -87,6 +88,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             Core.settings.defaults(keyGridAlpha, 40);
             Core.settings.defaults(keyMarkerScale, 100);
             Core.settings.defaults(keyMarkerColor, "ffffff");
+            Core.settings.defaults(keyHudMarkerFollowScale, 100);
             Core.settings.defaults(keyClaimDistance, 5);
             Core.settings.defaults(keySplitAlertThreshold, 10000);
             Core.settings.defaults(keySplitAlertWindowSeconds, 4);
@@ -127,6 +129,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             table.sliderPref(keyGridAlpha, 40, 0, 100, 5, v -> v + "%");
             table.sliderPref(keyMarkerScale, 100, 50, 300, 10, v -> v + "%");
             table.textPref(keyMarkerColor, "ffffff", v -> refreshMarkerColor());
+            table.sliderPref(keyHudMarkerFollowScale, 100, 0, 200, 10, v -> v + "%");
             table.sliderPref(keyClaimDistance, 5, 1, 20, 1, v -> v + "");
             table.sliderPref(keySplitAlertThreshold, 10000, 1000, 50000, 500, v -> v + "/s");
             table.sliderPref(keySplitAlertWindowSeconds, 4, 1, 15, 1, v -> v + "s");
@@ -423,6 +426,9 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             float markerScale = Core.settings.getInt(keyMarkerScale, 100) / 100f;
             if(markerScale <= 0.001f) return;
 
+            float follow = Mathf.clamp(Core.settings.getInt(keyHudMarkerFollowScale, 100) / 100f, 0f, 2f);
+            float invScalePow = Mathf.pow(invScale, 1f - follow);
+
             Font font = Fonts.outline;
             GlyphLayout layout = Pools.obtain(GlyphLayout.class, GlyphLayout::new);
 
@@ -430,7 +436,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             font.setUseIntegerPositions(false);
 
             float baseFontScale = (1f / 1.25f) / Math.max(0.0001f, Scl.scl(1f));
-            font.getData().setScale(baseFontScale * invScale * markerScale);
+            font.getData().setScale(baseFontScale * invScalePow * markerScale);
 
             Color textColor = Tmp.c2.set(markerColor);
             textColor.a *= parentAlpha;
@@ -446,7 +452,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
 
                 layout.setText(font, text);
 
-                float margin = 3f * invScale * markerScale;
+                float margin = 3f * invScalePow * markerScale;
 
                 Draw.color(0f, 0f, 0f, 0.35f * parentAlpha);
                 Fill.rect(info.x, info.y, layout.width + margin * 2f, layout.height + margin * 2f);
