@@ -355,6 +355,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             if(world == null || !state.isGame() || world.isGenerating()) return;
 
             cache.updateBasic();
+            cache.updateFullOverlay();
 
             if(!clipBegin()) return;
 
@@ -379,7 +380,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             transform.translate(tilesize / 2f, tilesize / 2f);
             Draw.trans(transform);
 
-            drawGridColors();
+            drawGridColors(invScale);
             drawBalanceMarkers(invScale);
             alert.drawHudMinimapMarker(invScale, viewRect);
 
@@ -389,41 +390,28 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             clipEnd();
         }
 
-        private void drawGridColors(){
+        private void drawGridColors(float invScale){
             float alpha = Mathf.clamp(Core.settings.getInt(keyGridAlpha, 40) / 100f) * parentAlpha;
             if(alpha <= 0.001f) return;
-            if(player == null) return;
 
-            for(int i = 0; i < cache.grids.size; i++){
-                GridInfo gi = cache.grids.get(i);
-                PowerGraph graph = gi.graph;
-                if(graph == null || graph.all == null || graph.all.isEmpty()) continue;
+            //draw the same full-map overlay texture on the HUD minimap
+            Texture overlayTex = cache.getFullOverlayTexture();
+            if(overlayTex != null){
+                overlayTex.setFilter(Texture.TextureFilter.nearest);
+                TextureRegion reg = Draw.wrap(overlayTex);
+                Draw.color(1f, 1f, 1f, parentAlpha);
+                Draw.rect(reg, world.width() * tilesize / 2f, world.height() * tilesize / 2f, world.width() * tilesize, world.height() * tilesize);
+            }
 
-                Color base = colorForGraph(gi.colorKey, Tmp.c1);
+            //fill marker rectangles with a light color to show the partitioned rectangles
+            float rectAlpha = alpha * 0.18f;
+            for(int ri = 0; ri < cache.markerRects.size; ri++){
+                MarkerRectInfo r = cache.markerRects.get(ri);
+                if(!viewRect.overlaps(r.worldRect)) continue;
+                Color base = colorForGraph(r.colorKey, Tmp.c1);
                 Color light = Tmp.c2.set(base).lerp(Color.white, 0.75f);
-                float lightAlpha = alpha * 0.22f;
-
-                //fill marker rectangles with a light color to show the grid area approximation
-                Draw.color(light.r, light.g, light.b, lightAlpha);
-                for(int ri = 0; ri < cache.markerRects.size; ri++){
-                    MarkerRectInfo r = cache.markerRects.get(ri);
-                    if(r.graph != graph) continue;
-                    if(!viewRect.overlaps(r.worldRect)) continue;
-                    Fill.rect(r.worldRect.x + r.worldRect.width / 2f, r.worldRect.y + r.worldRect.height / 2f, r.worldRect.width, r.worldRect.height);
-                }
-
-                //draw buildings on top in the base color
-                Draw.color(base.r, base.g, base.b, alpha);
-
-                Seq<mindustry.gen.Building> all = graph.all;
-                for(int j = 0; j < all.size; j++){
-                    mindustry.gen.Building b = all.get(j);
-                    if(b == null || b.team != player.team()) continue;
-                    if(!viewRect.contains(b.x, b.y)) continue;
-
-                    float half = (b.block.size * tilesize) / 2f;
-                    Fill.square(b.x, b.y, half);
-                }
+                Draw.color(light.r, light.g, light.b, rectAlpha);
+                Fill.rect(r.worldRect.x + r.worldRect.width / 2f, r.worldRect.y + r.worldRect.height / 2f, r.worldRect.width, r.worldRect.height);
             }
 
             Draw.color();
@@ -476,7 +464,10 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
         }
 
         private static Color colorForGraph(int key, Color out){
-            //Use integer hashing to avoid float precision issues with large packed tile positions.
+            //Deterministic, high-contrast colors:
+            //- stable across minimap opens (key is stable)
+            //- avoids "almost same" hues by quantizing hue to 12 buckets (30° each)
+            //- adds 3 saturation/value variants to support many grids without looking identical
             int h = key;
             h ^= (h >>> 16);
             h *= 0x7feb352d;
@@ -484,8 +475,16 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             h *= 0x846ca68b;
             h ^= (h >>> 16);
 
-            float hue = (h & 0x00ffffff) / (float)0x01000000; // [0, 1)
-            out.fromHsv(hue * 360f, 0.65f, 1f);
+            int hueBuckets = 12;
+            int variants = 3;
+            int hueIndex = Math.floorMod(h, hueBuckets);
+            int variant = Math.floorMod(h / hueBuckets, variants);
+
+            float hue = hueIndex * (360f / hueBuckets);
+            float sat = variant == 0 ? 0.78f : (variant == 1 ? 0.92f : 0.58f);
+            float val = variant == 1 ? 0.88f : 1f;
+
+            out.fromHsv(hue, sat, val);
             return out;
         }
     }
