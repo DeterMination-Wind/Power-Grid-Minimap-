@@ -1,0 +1,1255 @@
+package powergridminimap;
+
+import arc.Core;
+import arc.Events;
+import arc.graphics.Color;
+import arc.graphics.g2d.Draw;
+import arc.graphics.g2d.Fill;
+import arc.graphics.g2d.Font;
+import arc.graphics.g2d.GlyphLayout;
+import arc.graphics.g2d.Lines;
+import arc.math.Mat;
+import arc.math.Mathf;
+import arc.math.geom.Point2;
+import arc.math.geom.Rect;
+import arc.scene.Element;
+import arc.scene.ui.layout.Table;
+import arc.struct.ObjectSet;
+import arc.struct.Seq;
+import arc.util.Align;
+import arc.util.Time;
+import arc.util.Tmp;
+import arc.util.pooling.Pools;
+import arc.scene.event.Touchable;
+import arc.scene.ui.layout.Scl;
+import arc.util.Log;
+import arc.graphics.Pixmap;
+import arc.graphics.Texture;
+import arc.graphics.g2d.TextureRegion;
+import arc.struct.IntIntMap;
+import arc.struct.IntMap;
+import arc.struct.IntQueue;
+import arc.struct.IntSeq;
+import arc.struct.IntSet;
+import arc.util.Structs;
+import mindustry.content.Blocks;
+import mindustry.core.UI;
+import mindustry.game.EventType.ClientLoadEvent;
+import mindustry.game.EventType.WorldLoadEvent;
+import mindustry.game.EventType.Trigger;
+import mindustry.graphics.Drawf;
+import mindustry.ui.Fonts;
+import mindustry.world.blocks.power.PowerNode;
+import mindustry.world.blocks.power.PowerGraph;
+
+import java.lang.reflect.Field;
+import java.util.Arrays;
+
+import static mindustry.Vars.player;
+import static mindustry.Vars.renderer;
+import static mindustry.Vars.state;
+import static mindustry.Vars.tilesize;
+import static mindustry.Vars.ui;
+import static mindustry.Vars.world;
+
+public class PowerGridMinimapMod extends mindustry.mod.Mod{
+    private static final String overlayName = "pgmm-overlay";
+
+    private static final String keyEnabled = "pgmm-enabled";
+    private static final String keyGridAlpha = "pgmm-gridalpha";
+    private static final String keyMarkerScale = "pgmm-markerscale";
+    private static final String keyMarkerColor = "pgmm-markercolor";
+    private static final String keyClaimDistance = "pgmm-claimdistance";
+    private static final String keySplitAlertThreshold = "pgmm-splitalertthreshold";
+    private static final String keyReconnectStroke = "pgmm-markerstroke";
+    private static final String keyReconnectColor = "pgmm-markerlinecolor";
+
+    private final PowerGridCache cache = new PowerGridCache();
+    private final Color markerColor = new Color(Color.white);
+    private final Color reconnectColor = new Color(Color.orange);
+
+    private float nextAttachAttempt = 0f;
+    private boolean shownAttachToast = false;
+
+    private final FullMinimapAccess fullAccess = new FullMinimapAccess();
+    private final Rect fullBounds = new Rect();
+    private final Mat fullTransform = new Mat();
+    private final Mat oldTransform = new Mat();
+
+    private final SplitWatcher splitWatcher = new SplitWatcher();
+    private final SplitAlert alert = new SplitAlert();
+
+    public PowerGridMinimapMod(){
+        Events.on(ClientLoadEvent.class, e -> {
+            Core.settings.defaults(keyEnabled, true);
+            Core.settings.defaults(keyGridAlpha, 40);
+            Core.settings.defaults(keyMarkerScale, 100);
+            Core.settings.defaults(keyMarkerColor, "ffffff");
+            Core.settings.defaults(keyClaimDistance, 5);
+            Core.settings.defaults(keySplitAlertThreshold, 10000);
+            Core.settings.defaults(keyReconnectStroke, 2);
+            Core.settings.defaults(keyReconnectColor, "ffa500");
+
+            registerSettings();
+            refreshMarkerColor();
+            refreshReconnectColor();
+            Time.runTask(10f, this::ensureOverlayAttached);
+        });
+
+        Events.on(WorldLoadEvent.class, e -> {
+            cache.clear();
+            Time.runTask(10f, this::ensureOverlayAttached);
+        });
+
+        Events.run(Trigger.update, () -> {
+            //the HUD may be rebuilt; keep trying to attach.
+            if(Time.time >= nextAttachAttempt){
+                nextAttachAttempt = Time.time + 60f;
+                ensureOverlayAttached();
+            }
+
+            splitWatcher.update();
+        });
+
+        //draw on top of the full-screen minimap (opened via M).
+        Events.run(Trigger.uiDrawEnd, this::drawFullMinimapOverlay);
+    }
+
+    private void registerSettings(){
+        if(ui == null || ui.settings == null) return;
+
+        ui.settings.addCategory("@pgmm.category", table -> {
+            table.checkPref(keyEnabled, true);
+            table.sliderPref(keyGridAlpha, 40, 0, 100, 5, v -> v + "%");
+            table.sliderPref(keyMarkerScale, 100, 50, 300, 10, v -> v + "%");
+            table.textPref(keyMarkerColor, "ffffff", v -> refreshMarkerColor());
+            table.sliderPref(keyClaimDistance, 5, 1, 20, 1, v -> v + "");
+            table.sliderPref(keySplitAlertThreshold, 10000, 1000, 50000, 500, v -> v + "/s");
+            table.sliderPref(keyReconnectStroke, 2, 1, 8, 1, v -> v + "");
+            table.textPref(keyReconnectColor, "ffa500", v -> refreshReconnectColor());
+        });
+    }
+
+    private void refreshMarkerColor(){
+        Color out = markerColor;
+        String value = Core.settings.getString(keyMarkerColor, "ffffff");
+        if(!tryParseHexColor(value, out)){
+            out.set(Color.white);
+        }
+    }
+
+    private void refreshReconnectColor(){
+        Color out = reconnectColor;
+        String value = Core.settings.getString(keyReconnectColor, "ffa500");
+        if(!tryParseHexColor(value, out)){
+            out.set(Color.orange);
+        }
+    }
+
+    private void ensureOverlayAttached(){
+        if(ui == null || ui.hudGroup == null) return;
+
+        Element minimap = ui.hudGroup.find("minimap");
+        if(!(minimap instanceof Table)) return;
+
+        Table table = (Table)minimap;
+        if(table.find(overlayName) != null) return;
+
+        if(table.getChildren().isEmpty()) return;
+        Element base = table.getChildren().get(0);
+
+        MinimapOverlay overlay = new MinimapOverlay(base, cache, markerColor, alert);
+        overlay.name = overlayName;
+        overlay.touchable = Touchable.disabled;
+        table.addChild(overlay);
+
+        if(!shownAttachToast && ui.hudfrag != null){
+            shownAttachToast = true;
+            ui.hudfrag.showToast(Core.bundle.get("pgmm.toast.enabled"));
+        }
+
+        Log.info("PGMM: overlay attached.");
+    }
+
+    private void drawFullMinimapOverlay(){
+        if(!Core.settings.getBool(keyEnabled, true)) return;
+        if(ui == null || ui.minimapfrag == null || !ui.minimapfrag.shown()) return;
+        if(renderer == null || renderer.minimap == null || renderer.minimap.getTexture() == null) return;
+        if(world == null || !state.isGame() || world.isGenerating()) return;
+        if(player == null) return;
+
+        cache.updateBasic();
+        cache.updateFullOverlay();
+
+        float w = Core.graphics.getWidth();
+        float h = Core.graphics.getHeight();
+
+        float ratio = (float)renderer.minimap.getTexture().height / (float)renderer.minimap.getTexture().width;
+
+        float panx = fullAccess.getPanX(ui.minimapfrag);
+        float pany = fullAccess.getPanY(ui.minimapfrag);
+        float zoom = fullAccess.getZoom(ui.minimapfrag);
+        float baseSize = fullAccess.getBaseSize(ui.minimapfrag, Scl.scl(5f));
+
+        float size = baseSize * zoom * world.width();
+        fullBounds.set(w/2f + panx*zoom - size/2f, h/2f + pany*zoom - size/2f * ratio, size, size * ratio);
+
+        //overlay fill texture
+        Texture overlayTex = cache.getFullOverlayTexture();
+        if(overlayTex != null){
+            overlayTex.setFilter(Texture.TextureFilter.nearest);
+            TextureRegion reg = Draw.wrap(overlayTex);
+            Draw.color();
+            Draw.rect(reg, w/2f + panx*zoom, h/2f + pany*zoom, size, size * ratio);
+        }
+
+        //balance markers on top (world-coordinates transform)
+        float scaleFactor = fullBounds.width / world.unitWidth();
+        float invScale = 1f / scaleFactor;
+
+        oldTransform.set(Draw.trans());
+        fullTransform.idt();
+        fullTransform.translate(fullBounds.x, fullBounds.y);
+        fullTransform.scl(Tmp.v1.set(scaleFactor, fullBounds.height / world.unitHeight()));
+        fullTransform.translate(tilesize / 2f, tilesize / 2f);
+        Draw.trans(fullTransform);
+
+        Rect viewRect = Tmp.r2.set(0f, 0f, world.unitWidth(), world.unitHeight());
+        drawBalanceMarkersOnFullMap(viewRect, invScale);
+
+        //reconnect marker on top
+        alert.drawWorldMarker(viewRect, invScale);
+
+        Draw.trans(oldTransform);
+        Draw.reset();
+
+        alert.drawScreenText();
+    }
+
+    private void drawBalanceMarkersOnFullMap(Rect viewRect, float invScale){
+        float markerScale = Core.settings.getInt(keyMarkerScale, 100) / 100f;
+        if(markerScale <= 0.001f) return;
+
+        Font font = Fonts.outline;
+        GlyphLayout layout = Pools.obtain(GlyphLayout.class, GlyphLayout::new);
+
+        boolean ints = font.usesIntegerPositions();
+        font.setUseIntegerPositions(false);
+
+        float baseFontScale = (1f / 1.25f) / Math.max(0.0001f, Scl.scl(1f));
+        font.getData().setScale(baseFontScale * invScale * markerScale);
+
+        Color textColor = Tmp.c2.set(markerColor);
+
+        for(int i = 0; i < cache.grids.size; i++){
+            GridInfo info = cache.grids.get(i);
+            PowerGraph graph = info.graph;
+            if(graph == null) continue;
+            if(!viewRect.contains(info.centerX, info.centerY)) continue;
+
+            float balance = graph.getPowerBalance() * 60f;
+            String text = (balance >= 0f ? "+" : "") + UI.formatAmount((long)balance);
+
+            layout.setText(font, text);
+
+            float margin = 3f * invScale * markerScale;
+
+            Draw.color(0f, 0f, 0f, 0.35f);
+            Fill.rect(info.centerX, info.centerY, layout.width + margin * 2f, layout.height + margin * 2f);
+            Draw.color();
+
+            font.setColor(textColor);
+            font.draw(text, info.centerX, info.centerY + layout.height / 2f, 0, Align.center, false);
+        }
+
+        Draw.reset();
+        font.getData().setScale(1f);
+        font.setColor(Color.white);
+        font.setUseIntegerPositions(ints);
+        Pools.free(layout);
+    }
+
+    private static boolean tryParseHexColor(String text, Color out){
+        if(text == null) return false;
+        String value = text.trim();
+        if(value.startsWith("#")){
+            value = value.substring(1);
+        }
+
+        int len = value.length();
+        if(len != 6 && len != 8) return false;
+
+        try{
+            long parsed = Long.parseLong(value, 16);
+            if(len == 6){
+                float r = ((parsed >> 16) & 0xff) / 255f;
+                float g = ((parsed >> 8) & 0xff) / 255f;
+                float b = (parsed & 0xff) / 255f;
+                out.set(r, g, b, 1f);
+            }else{
+                float r = ((parsed >> 24) & 0xff) / 255f;
+                float g = ((parsed >> 16) & 0xff) / 255f;
+                float b = ((parsed >> 8) & 0xff) / 255f;
+                float a = (parsed & 0xff) / 255f;
+                out.set(r, g, b, a);
+            }
+            return true;
+        }catch(Throwable ignored){
+            return false;
+        }
+    }
+
+    private static class MinimapOverlay extends Element{
+        private static final float minimapBaseSize = 16f;
+
+        private final Element base;
+        private final PowerGridCache cache;
+        private final Color markerColor;
+        private final SplitAlert alert;
+
+        private final Rect viewRect = new Rect();
+        private final Mat transform = new Mat();
+        private final Mat oldTransform = new Mat();
+
+        public MinimapOverlay(Element base, PowerGridCache cache, Color markerColor, SplitAlert alert){
+            this.base = base;
+            this.cache = cache;
+            this.markerColor = markerColor;
+            this.alert = alert;
+        }
+
+        @Override
+        public void act(float delta){
+            if(base != null){
+                setBounds(base.x, base.y, base.getWidth(), base.getHeight());
+            }
+            super.act(delta);
+        }
+
+        @Override
+        public void draw(){
+            if(!Core.settings.getBool(keyEnabled, true)) return;
+            if(renderer == null || renderer.minimap == null || renderer.minimap.getRegion() == null) return;
+            if(world == null || !state.isGame() || world.isGenerating()) return;
+
+            cache.updateBasic();
+
+            if(!clipBegin()) return;
+
+            float zoom = renderer.minimap.getZoom();
+            float sz = minimapBaseSize * zoom;
+            float dx = (Core.camera.position.x / tilesize);
+            float dy = (Core.camera.position.y / tilesize);
+            dx = Mathf.clamp(dx, sz, world.width() - sz);
+            dy = Mathf.clamp(dy, sz, world.height() - sz);
+
+            viewRect.set((dx - sz) * tilesize, (dy - sz) * tilesize, sz * 2f * tilesize, sz * 2f * tilesize);
+
+            float scale = width / viewRect.width;
+            float invScale = 1f / scale;
+
+            oldTransform.set(Draw.trans());
+
+            transform.idt();
+            transform.translate(x, y);
+            transform.scl(Tmp.v1.set(scale, height / viewRect.height));
+            transform.translate(-viewRect.x, -viewRect.y);
+            transform.translate(tilesize / 2f, tilesize / 2f);
+            Draw.trans(transform);
+
+            drawGridColors();
+            drawBalanceMarkers(invScale);
+            alert.drawHudMinimapMarker(invScale, viewRect);
+
+            Draw.trans(oldTransform);
+            Draw.reset();
+
+            clipEnd();
+        }
+
+        private void drawGridColors(){
+            float alpha = Mathf.clamp(Core.settings.getInt(keyGridAlpha, 40) / 100f) * parentAlpha;
+            if(alpha <= 0.001f) return;
+            if(player == null) return;
+
+            for(int i = 0; i < cache.grids.size; i++){
+                PowerGraph graph = cache.grids.get(i).graph;
+                if(graph == null || graph.all == null || graph.all.isEmpty()) continue;
+
+                Color c = colorForGraph(graph.getID(), Tmp.c1);
+                Draw.color(c.r, c.g, c.b, alpha);
+
+                Seq<mindustry.gen.Building> all = graph.all;
+                for(int j = 0; j < all.size; j++){
+                    mindustry.gen.Building b = all.get(j);
+                    if(b == null || b.team != player.team()) continue;
+                    if(!viewRect.contains(b.x, b.y)) continue;
+
+                    float half = (b.block.size * tilesize) / 2f;
+                    Fill.square(b.x, b.y, half);
+                }
+            }
+
+            Draw.color();
+        }
+
+        private void drawBalanceMarkers(float invScale){
+            if(player == null) return;
+
+            float markerScale = Core.settings.getInt(keyMarkerScale, 100) / 100f;
+            if(markerScale <= 0.001f) return;
+
+            Font font = Fonts.outline;
+            GlyphLayout layout = Pools.obtain(GlyphLayout.class, GlyphLayout::new);
+
+            boolean ints = font.usesIntegerPositions();
+            font.setUseIntegerPositions(false);
+
+            float baseFontScale = (1f / 1.25f) / Math.max(0.0001f, Scl.scl(1f));
+            font.getData().setScale(baseFontScale * invScale * markerScale);
+
+            Color textColor = Tmp.c2.set(markerColor);
+            textColor.a *= parentAlpha;
+
+            for(int i = 0; i < cache.grids.size; i++){
+                GridInfo info = cache.grids.get(i);
+                PowerGraph graph = info.graph;
+                if(graph == null) continue;
+                if(!viewRect.contains(info.centerX, info.centerY)) continue;
+
+                float balance = graph.getPowerBalance() * 60f;
+                String text = (balance >= 0f ? "+" : "") + UI.formatAmount((long)balance);
+
+                layout.setText(font, text);
+
+                float margin = 3f * invScale * markerScale;
+
+                Draw.color(0f, 0f, 0f, 0.35f * parentAlpha);
+                Fill.rect(info.centerX, info.centerY, layout.width + margin * 2f, layout.height + margin * 2f);
+                Draw.color();
+
+                font.setColor(textColor);
+                font.draw(text, info.centerX, info.centerY + layout.height / 2f, 0, Align.center, false);
+            }
+
+            Draw.reset();
+            font.getData().setScale(1f);
+            font.setColor(Color.white);
+            font.setUseIntegerPositions(ints);
+            Pools.free(layout);
+        }
+
+        private static Color colorForGraph(int id, Color out){
+            float hue = (id * 0.61803398875f) % 1f;
+            out.fromHsv(hue * 360f, 0.65f, 1f);
+            return out;
+        }
+    }
+
+    private static class GridInfo{
+        PowerGraph graph;
+        float centerX, centerY;
+    }
+
+    private static class FullMinimapAccess{
+        private boolean initialized;
+        private Field panx, pany, zoom, baseSize;
+
+        private void init(Object frag){
+            if(initialized) return;
+            initialized = true;
+            try{
+                Class<?> type = frag.getClass();
+                panx = type.getDeclaredField("panx");
+                pany = type.getDeclaredField("pany");
+                zoom = type.getDeclaredField("zoom");
+                baseSize = type.getDeclaredField("baseSize");
+                panx.setAccessible(true);
+                pany.setAccessible(true);
+                zoom.setAccessible(true);
+                baseSize.setAccessible(true);
+            }catch(Throwable t){
+                Log.err("PGMM: failed to reflect MinimapFragment fields, fullscreen overlay may be misaligned.");
+            }
+        }
+
+        float getPanX(Object frag){
+            init(frag);
+            try{
+                return panx == null ? 0f : panx.getFloat(frag);
+            }catch(Throwable ignored){
+                return 0f;
+            }
+        }
+
+        float getPanY(Object frag){
+            init(frag);
+            try{
+                return pany == null ? 0f : pany.getFloat(frag);
+            }catch(Throwable ignored){
+                return 0f;
+            }
+        }
+
+        float getZoom(Object frag){
+            init(frag);
+            try{
+                return zoom == null ? 1f : zoom.getFloat(frag);
+            }catch(Throwable ignored){
+                return 1f;
+            }
+        }
+
+        float getBaseSize(Object frag, float fallback){
+            init(frag);
+            try{
+                return baseSize == null ? fallback : baseSize.getFloat(frag);
+            }catch(Throwable ignored){
+                return fallback;
+            }
+        }
+    }
+
+    private static class PowerGridCache{
+        private static final float updateInterval = 30f;
+
+        private final ObjectSet<PowerGraph> graphs = new ObjectSet<>();
+        private final Seq<GridInfo> grids = new Seq<>();
+
+        private float nextUpdateTime = 0f;
+
+        //fullscreen overlay cache
+        private float nextFullUpdateTime = 0f;
+        private Pixmap fullOverlayPixmap;
+        private Texture fullOverlayTexture;
+        private int lastClaimDistance = -1;
+        private int lastGridAlpha = -1;
+        private int lastWorldW = -1, lastWorldH = -1;
+
+        public void clear(){
+            graphs.clear();
+            grids.clear();
+            nextUpdateTime = 0f;
+            nextFullUpdateTime = 0f;
+
+            if(fullOverlayPixmap != null){
+                fullOverlayPixmap.dispose();
+                fullOverlayPixmap = null;
+            }
+            if(fullOverlayTexture != null){
+                fullOverlayTexture.dispose();
+                fullOverlayTexture = null;
+            }
+            lastClaimDistance = -1;
+            lastGridAlpha = -1;
+            lastWorldW = lastWorldH = -1;
+        }
+
+        public void updateBasic(){
+            if(!state.isGame() || world == null || world.isGenerating() || player == null){
+                clear();
+                return;
+            }
+
+            if(Time.time < nextUpdateTime) return;
+            nextUpdateTime = Time.time + updateInterval;
+
+            graphs.clear();
+            grids.clear();
+
+            for(int i = 0; i < mindustry.gen.Groups.build.size(); i++){
+                mindustry.gen.Building build = mindustry.gen.Groups.build.index(i);
+                if(build == null || build.team != player.team() || build.power == null) continue;
+                if(build.power.graph == null || build.power.graph.all == null || build.power.graph.all.isEmpty()) continue;
+                graphs.add(build.power.graph);
+            }
+
+            for(PowerGraph graph : graphs){
+                float sx = 0f, sy = 0f;
+                int count = 0;
+
+                Seq<mindustry.gen.Building> all = graph.all;
+                for(int i = 0; i < all.size; i++){
+                    mindustry.gen.Building b = all.get(i);
+                    if(b == null || b.team != player.team()) continue;
+                    sx += b.x;
+                    sy += b.y;
+                    count++;
+                }
+
+                if(count <= 0) continue;
+
+                GridInfo info = new GridInfo();
+                info.graph = graph;
+                info.centerX = sx / count;
+                info.centerY = sy / count;
+                grids.add(info);
+            }
+        }
+
+        public void updateFullOverlay(){
+            if(!state.isGame() || world == null || world.isGenerating() || player == null){
+                clear();
+                return;
+            }
+
+            int claimDistance = Core.settings.getInt(keyClaimDistance, 5);
+            int gridAlpha = Core.settings.getInt(keyGridAlpha, 40);
+
+            boolean sizeChanged = world.width() != lastWorldW || world.height() != lastWorldH;
+            boolean settingsChanged = claimDistance != lastClaimDistance || gridAlpha != lastGridAlpha;
+
+            if(!settingsChanged && !sizeChanged && Time.time < nextFullUpdateTime) return;
+            nextFullUpdateTime = Time.time + 60f;
+
+            lastClaimDistance = claimDistance;
+            lastGridAlpha = gridAlpha;
+            lastWorldW = world.width();
+            lastWorldH = world.height();
+
+            rebuildFullOverlay(claimDistance, gridAlpha);
+        }
+
+        public Texture getFullOverlayTexture(){
+            return fullOverlayTexture;
+        }
+
+        private void ensureOverlayBuffers(int w, int h){
+            if(fullOverlayPixmap != null && (fullOverlayPixmap.width != w || fullOverlayPixmap.height != h)){
+                fullOverlayPixmap.dispose();
+                fullOverlayPixmap = null;
+            }
+            if(fullOverlayTexture != null && (fullOverlayTexture.width != w || fullOverlayTexture.height != h)){
+                fullOverlayTexture.dispose();
+                fullOverlayTexture = null;
+            }
+
+            if(fullOverlayPixmap == null){
+                fullOverlayPixmap = new Pixmap(w, h);
+            }
+            if(fullOverlayTexture == null){
+                fullOverlayTexture = new Texture(fullOverlayPixmap);
+            }
+        }
+
+        private void rebuildFullOverlay(int claimDistance, int gridAlphaInt){
+            //basic graph list required
+            updateBasic();
+
+            int w = world.width();
+            int h = world.height();
+            ensureOverlayBuffers(w, h);
+
+            //clear to transparent
+            fullOverlayPixmap.fill(0);
+
+            if(grids.isEmpty()) {
+                fullOverlayTexture.draw(fullOverlayPixmap);
+                return;
+            }
+
+            final int tileCount = w * h;
+            int[] ownerPower = new int[tileCount];
+            Arrays.fill(ownerPower, -1);
+            int[] overlayOwner = new int[tileCount];
+            Arrays.fill(overlayOwner, -1);
+
+            //seed: power-using buildings tiles
+            for(int gi = 0; gi < grids.size; gi++){
+                final int gridIndex = gi;
+                PowerGraph graph = grids.get(gi).graph;
+                if(graph == null || graph.all == null) continue;
+                Seq<mindustry.gen.Building> all = graph.all;
+                for(int bi = 0; bi < all.size; bi++){
+                    mindustry.gen.Building b = all.get(bi);
+                    if(b == null || b.team != player.team()) continue;
+                    if(b.tile == null) continue;
+                    b.tile.getLinkedTiles(t -> {
+                        int idx = t.x + t.y * w;
+                        if(idx >= 0 && idx < tileCount) ownerPower[idx] = gridIndex;
+                    });
+                }
+            }
+
+            int[] ownerClaim = Arrays.copyOf(ownerPower, ownerPower.length);
+            boolean[] claimedBuild = new boolean[tileCount];
+            for(int i = 0; i < tileCount; i++){
+                claimedBuild[i] = ownerClaim[i] >= 0;
+            }
+
+            //rule 1: adjacent non-power buildings join if adjacent to exactly one grid (by power tiles)
+            //collect non-power buildings first
+            Seq<mindustry.gen.Building> nonPower = new Seq<>();
+            for(int i = 0; i < mindustry.gen.Groups.build.size(); i++){
+                mindustry.gen.Building b = mindustry.gen.Groups.build.index(i);
+                if(b == null || b.team != player.team()) continue;
+                if(b.power != null) continue;
+                if(b.tile == null) continue;
+                nonPower.add(b);
+            }
+
+            boolean[] assigned = new boolean[nonPower.size];
+            IntSeq tmpTiles = new IntSeq();
+            int[] neighborGrids = new int[8];
+
+            for(int ni = 0; ni < nonPower.size; ni++){
+                mindustry.gen.Building b = nonPower.get(ni);
+                tmpTiles.clear();
+                b.tile.getLinkedTiles(t -> tmpTiles.add(t.x + t.y * w));
+
+                int ncount = 0;
+                Arrays.fill(neighborGrids, -1);
+
+                for(int ti = 0; ti < tmpTiles.size; ti++){
+                    int idx = tmpTiles.get(ti);
+                    int tx = idx % w;
+                    int ty = idx / w;
+
+                    //4-dir adjacency
+                    ncount = addNeighborGrid(ownerPower, w, h, tx + 1, ty, neighborGrids, ncount);
+                    ncount = addNeighborGrid(ownerPower, w, h, tx - 1, ty, neighborGrids, ncount);
+                    ncount = addNeighborGrid(ownerPower, w, h, tx, ty + 1, neighborGrids, ncount);
+                    ncount = addNeighborGrid(ownerPower, w, h, tx, ty - 1, neighborGrids, ncount);
+                    if(ncount > 1) break;
+                }
+
+                if(ncount == 1){
+                    int g = neighborGrids[0];
+                    //claim this building tiles into that grid
+                    for(int ti = 0; ti < tmpTiles.size; ti++){
+                        int idx = tmpTiles.get(ti);
+                        ownerClaim[idx] = g;
+                        claimedBuild[idx] = true;
+                    }
+                    assigned[ni] = true;
+                }
+            }
+
+            //rule 2: distance BFS from power tiles; non-power buildings within threshold join nearest grid
+            if(claimDistance > 0){
+                short[] dist = new short[tileCount];
+                Arrays.fill(dist, (short)-1);
+                int[] ownerNear = new int[tileCount];
+                Arrays.fill(ownerNear, -1);
+                IntQueue q = new IntQueue();
+
+                for(int i = 0; i < tileCount; i++){
+                    int g = ownerPower[i];
+                    if(g >= 0){
+                        dist[i] = 0;
+                        ownerNear[i] = g;
+                        q.addLast(i);
+                    }
+                }
+
+                while(q.size > 0){
+                    int idx = q.removeFirst();
+                    int d = dist[idx];
+                    if(d >= claimDistance) continue;
+                    int x = idx % w;
+                    int y = idx / w;
+                    int g = ownerNear[idx];
+
+                    //4-dir spread
+                    spread(dist, ownerNear, q, w, h, x + 1, y, d + 1, g);
+                    spread(dist, ownerNear, q, w, h, x - 1, y, d + 1, g);
+                    spread(dist, ownerNear, q, w, h, x, y + 1, d + 1, g);
+                    spread(dist, ownerNear, q, w, h, x, y - 1, d + 1, g);
+                }
+
+                for(int ni = 0; ni < nonPower.size; ni++){
+                    if(assigned[ni]) continue;
+                    mindustry.gen.Building b = nonPower.get(ni);
+                    int cx = b.tileX();
+                    int cy = b.tileY();
+                    if(cx < 0 || cy < 0 || cx >= w || cy >= h) continue;
+                    int cidx = cx + cy * w;
+                    int d = dist[cidx];
+                    int g = ownerNear[cidx];
+                    if(d >= 0 && d < claimDistance && g >= 0){
+                        tmpTiles.clear();
+                        b.tile.getLinkedTiles(t -> tmpTiles.add(t.x + t.y * w));
+                        for(int ti = 0; ti < tmpTiles.size; ti++){
+                            int idx = tmpTiles.get(ti);
+                            ownerClaim[idx] = g;
+                            claimedBuild[idx] = true;
+                        }
+                        assigned[ni] = true;
+                    }
+                }
+            }
+
+            //rule 4: for each grid, compute boundary+interior fill per connected component and render into pixmap
+            boolean[] visited = new boolean[tileCount];
+            IntQueue bfs = new IntQueue();
+            IntSeq comp = new IntSeq();
+
+            float alpha = Mathf.clamp(gridAlphaInt / 100f);
+
+            for(int gi = 0; gi < grids.size; gi++){
+                int graphId = grids.get(gi).graph == null ? gi : grids.get(gi).graph.getID();
+                Color base = MinimapOverlay.colorForGraph(graphId, Tmp.c1);
+                Color dark = Tmp.c2.set(base).mul(0.55f);
+                Color light = Tmp.c3.set(base).lerp(Color.white, 0.75f);
+
+                for(int idx = 0; idx < tileCount; idx++){
+                    if(ownerClaim[idx] != gi || visited[idx]) continue;
+
+                    //BFS component gather + bbox
+                    comp.clear();
+                    bfs.clear();
+                    bfs.addLast(idx);
+                    visited[idx] = true;
+
+                    int minx = w, miny = h, maxx = -1, maxy = -1;
+
+                    while(bfs.size > 0){
+                        int cur = bfs.removeFirst();
+                        comp.add(cur);
+                        int x = cur % w;
+                        int y = cur / w;
+                        if(x < minx) minx = x;
+                        if(y < miny) miny = y;
+                        if(x > maxx) maxx = x;
+                        if(y > maxy) maxy = y;
+
+                        //neighbors
+                        int n;
+                        if(x + 1 < w && !visited[n = cur + 1] && ownerClaim[n] == gi){ visited[n] = true; bfs.addLast(n); }
+                        if(x - 1 >= 0 && !visited[n = cur - 1] && ownerClaim[n] == gi){ visited[n] = true; bfs.addLast(n); }
+                        if(y + 1 < h && !visited[n = cur + w] && ownerClaim[n] == gi){ visited[n] = true; bfs.addLast(n); }
+                        if(y - 1 >= 0 && !visited[n = cur - w] && ownerClaim[n] == gi){ visited[n] = true; bfs.addLast(n); }
+                    }
+
+                    if(comp.isEmpty()) continue;
+
+                    //expand bbox by 1 to allow outside fill
+                    int bx0 = Math.max(0, minx - 1);
+                    int by0 = Math.max(0, miny - 1);
+                    int bx1 = Math.min(w - 1, maxx + 1);
+                    int by1 = Math.min(h - 1, maxy + 1);
+
+                    int bw = bx1 - bx0 + 1;
+                    int bh = by1 - by0 + 1;
+                    //rectangular-biased render:
+                    //- fill the whole (expanded) bounding box area with light color
+                    //- draw a dark border around the rectangle (closed shape)
+                    //- draw claimed building tiles with base color; border tiles with dark color
+                    int baseRgba = Tmp.c4.set(base.r, base.g, base.b, alpha).rgba();
+                    int darkRgba = Tmp.c4.set(dark.r, dark.g, dark.b, alpha).rgba();
+                    int lightRgba = Tmp.c4.set(light.r, light.g, light.b, alpha * 0.45f).rgba();
+
+                    for(int wy = by0; wy <= by1; wy++){
+                        int yOff = wy * w;
+                        boolean edgeY = wy == by0 || wy == by1;
+                        for(int wx = bx0; wx <= bx1; wx++){
+                            int widx = wx + yOff;
+
+                            //don't overwrite other grids' claimed buildings
+                            if(claimedBuild[widx] && ownerClaim[widx] != gi) continue;
+
+                            boolean edge = edgeY || wx == bx0 || wx == bx1;
+                            boolean isBuild = claimedBuild[widx] && ownerClaim[widx] == gi;
+
+                            //avoid messy overlaps between rectangles: only paint empty tiles if unowned yet
+                            if(!isBuild && overlayOwner[widx] != -1 && overlayOwner[widx] != gi) continue;
+
+                            int rgba;
+                            if(isBuild){
+                                rgba = edge ? darkRgba : baseRgba;
+                            }else{
+                                rgba = edge ? darkRgba : lightRgba;
+                            }
+
+                            fullOverlayPixmap.set(wx, h - 1 - wy, rgba);
+                            if(!isBuild){
+                                overlayOwner[widx] = gi;
+                            }
+                        }
+                    }
+                }
+            }
+
+            fullOverlayTexture.draw(fullOverlayPixmap);
+        }
+
+        private static int addNeighborGrid(int[] ownerPower, int w, int h, int x, int y, int[] out, int count){
+            if(x < 0 || y < 0 || x >= w || y >= h) return count;
+            int g = ownerPower[x + y * w];
+            if(g < 0) return count;
+            for(int i = 0; i < count; i++){
+                if(out[i] == g) return count;
+            }
+            out[count] = g;
+            return count + 1;
+        }
+
+        private static void spread(short[] dist, int[] owner, IntQueue q, int w, int h, int x, int y, int nd, int g){
+            if(x < 0 || y < 0 || x >= w || y >= h) return;
+            int idx = x + y * w;
+            int cd = dist[idx];
+            if(cd == -1){
+                dist[idx] = (short)nd;
+                owner[idx] = g;
+                q.addLast(idx);
+            }else if(cd == nd){
+                //tie-break: keep deterministic smallest grid index
+                int og = owner[idx];
+                if(og > g){
+                    owner[idx] = g;
+                }
+            }
+        }
+
+    }
+
+    private static class ReconnectHint{
+        int graphA, graphB;
+        float worldX, worldY;
+        float endAx, endAy, endBx, endBy;
+        float expiresAt;
+    }
+
+    private class SplitAlert{
+        private ReconnectHint hint;
+        private float textExpiresAt = 0f;
+
+        void trigger(int graphA, int graphB, float midWorldX, float midWorldY, float ax, float ay, float bx, float by){
+            ReconnectHint h = new ReconnectHint();
+            h.graphA = graphA;
+            h.graphB = graphB;
+            h.worldX = midWorldX;
+            h.worldY = midWorldY;
+            h.endAx = ax;
+            h.endAy = ay;
+            h.endBx = bx;
+            h.endBy = by;
+            h.expiresAt = Time.time + 60f * 8f;
+            hint = h;
+
+            textExpiresAt = Time.time + 60f * 4f;
+            if(ui != null && ui.hudfrag != null){
+                ui.hudfrag.showToast("[scarlet]" + Core.bundle.get("pgmm.toast.disconnected") + "[]");
+            }
+        }
+
+        void drawHudMinimapMarker(float invScale, Rect viewRect){
+            if(hint == null || Time.time > hint.expiresAt) return;
+            if(!viewRect.contains(hint.worldX, hint.worldY)) return;
+
+            float r = tilesize * 2f * invScale;
+            Draw.z(Drawf.text() + 1f);
+            Draw.color(reconnectColor);
+            Lines.stroke(Scl.scl(Core.settings.getInt(keyReconnectStroke, 2)) * invScale);
+            Lines.circle(hint.worldX, hint.worldY, r);
+            Lines.line(hint.endAx, hint.endAy, hint.worldX, hint.worldY);
+            Lines.line(hint.endBx, hint.endBy, hint.worldX, hint.worldY);
+            Draw.reset();
+        }
+
+        void drawWorldMarker(Rect viewRect, float invScale){
+            if(hint == null || Time.time > hint.expiresAt) return;
+            if(!viewRect.contains(hint.worldX, hint.worldY)) return;
+
+            float r = tilesize * 2.2f * invScale;
+            Draw.color(reconnectColor);
+            Lines.stroke(Scl.scl(Core.settings.getInt(keyReconnectStroke, 2)) * invScale);
+            Lines.circle(hint.worldX, hint.worldY, r);
+            Lines.line(hint.endAx, hint.endAy, hint.worldX, hint.worldY);
+            Lines.line(hint.endBx, hint.endBy, hint.worldX, hint.worldY);
+            Draw.reset();
+        }
+
+        void drawScreenText(){
+            if(Time.time > textExpiresAt) return;
+            if(state == null || state.isMenu()) return;
+
+            String text = Core.bundle.get("pgmm.alert.disconnected");
+
+            Font font = Fonts.outline;
+            GlyphLayout layout = Pools.obtain(GlyphLayout.class, GlyphLayout::new);
+            boolean ints = font.usesIntegerPositions();
+            font.setUseIntegerPositions(false);
+
+            float scale = 0.9f / Scl.scl(1f);
+            font.getData().setScale(scale);
+
+            layout.setText(font, text);
+            float cx = Core.graphics.getWidth() / 2f;
+            float cy = Core.graphics.getHeight() / 2f + Scl.scl(120f);
+
+            Draw.color(0f, 0f, 0f, 0.35f);
+            Fill.rect(cx, cy, layout.width + Scl.scl(14f), layout.height + Scl.scl(10f));
+            Draw.color();
+            font.setColor(Color.orange);
+            font.draw(text, cx, cy + layout.height / 2f, 0, Align.center, false);
+
+            font.getData().setScale(1f);
+            font.setColor(Color.white);
+            font.setUseIntegerPositions(ints);
+            Pools.free(layout);
+        }
+    }
+
+    private class SplitWatcher{
+        private static final float scanInterval = 60f;
+        private static final float cooldown = 60f * 10f;
+
+        private final IntIntMap lastGraphByBuildPos = new IntIntMap();
+        private final IntMap<Float> lastGraphPowerIn = new IntMap<>();
+        private final IntMap<Float> lastSplitTime = new IntMap<>();
+
+        private float nextScan = 0f;
+
+        void update(){
+            if(Time.time < nextScan) return;
+            nextScan = Time.time + scanInterval;
+
+            if(!state.isGame() || world == null || world.isGenerating() || player == null){
+                lastGraphByBuildPos.clear();
+                lastGraphPowerIn.clear();
+                lastSplitTime.clear();
+                return;
+            }
+
+            int threshold = Core.settings.getInt(keySplitAlertThreshold, 10000);
+
+            IntMap<IntSet> prevToNew = new IntMap<>();
+            IntMap<Float> currentPowerIn = new IntMap<>();
+            IntMap<Float> currentBalance = new IntMap<>();
+
+            //scan all player buildings with power modules
+            for(int i = 0; i < mindustry.gen.Groups.build.size(); i++){
+                mindustry.gen.Building b = mindustry.gen.Groups.build.index(i);
+                if(b == null || b.team != player.team() || b.power == null || b.power.graph == null) continue;
+
+                int pos = b.pos();
+                int newId = b.power.graph.getID();
+                int prevId = lastGraphByBuildPos.get(pos, Integer.MIN_VALUE);
+
+                lastGraphByBuildPos.put(pos, newId);
+
+                //build stats
+                currentPowerIn.put(newId, b.power.graph.getLastScaledPowerIn());
+                currentBalance.put(newId, b.power.graph.getPowerBalance());
+
+                if(prevId != Integer.MIN_VALUE && prevId != newId){
+                    IntSet set = prevToNew.get(prevId);
+                    if(set == null){
+                        set = new IntSet();
+                        prevToNew.put(prevId, set);
+                    }
+                    set.add(newId);
+                }
+            }
+
+            //detect splits
+            for(IntMap.Entry<IntSet> e : prevToNew){
+                int prevId = e.key;
+                IntSet newIds = e.value;
+                if(newIds.size <= 1) continue;
+
+                float prevPowerIn = lastGraphPowerIn.get(prevId, 0f);
+                if(prevPowerIn < threshold) continue;
+
+                float lastTime = lastSplitTime.get(prevId, -999999f);
+                if(Time.time - lastTime < cooldown) continue;
+
+                //pick one negative + one strongest other
+                final int[] negativeId = {-1};
+                final int[] otherId = {-1};
+                final float[] bestOtherPower = {Float.NEGATIVE_INFINITY};
+
+                newIds.each(id -> {
+                    if(negativeId[0] != -1) return;
+                    if(currentBalance.get(id, 0f) < 0f){
+                        negativeId[0] = id;
+                    }
+                });
+                if(negativeId[0] == -1) continue;
+
+                newIds.each(id -> {
+                    if(id == negativeId[0]) return;
+                    float pin = currentPowerIn.get(id, 0f);
+                    if(pin > bestOtherPower[0]){
+                        bestOtherPower[0] = pin;
+                        otherId[0] = id;
+                    }
+                });
+                if(otherId[0] == -1) continue;
+
+                int aId = negativeId[0];
+                int bId = otherId[0];
+
+                ReconnectResult reconnect = findReconnectPoint(aId, bId);
+                if(reconnect != null){
+                    lastSplitTime.put(prevId, Time.time);
+                    alert.trigger(aId, bId, reconnect.midX, reconnect.midY, reconnect.ax, reconnect.ay, reconnect.bx, reconnect.by);
+                }
+            }
+
+            //store last stats
+            lastGraphPowerIn.clear();
+            for(IntMap.Entry<Float> e : currentPowerIn){
+                lastGraphPowerIn.put(e.key, e.value);
+            }
+        }
+
+        private ReconnectResult findReconnectPoint(int graphA, int graphB){
+            float range = ((PowerNode)Blocks.powerNodeLarge).laserRange * tilesize;
+
+            //collect tiles for each graph (power tiles only; faster and reflects actual graph connectivity)
+            IntSeq tilesA = new IntSeq();
+            IntSet tilesB = new IntSet();
+
+            int w = world.width();
+            int h = world.height();
+
+            for(int i = 0; i < mindustry.gen.Groups.build.size(); i++){
+                mindustry.gen.Building b = mindustry.gen.Groups.build.index(i);
+                if(b == null || b.team != player.team() || b.power == null || b.power.graph == null || b.tile == null) continue;
+                int gid = b.power.graph.getID();
+                if(gid != graphA && gid != graphB) continue;
+
+                if(gid == graphA){
+                    b.tile.getLinkedTiles(t -> tilesA.add(t.pos()));
+                }else{
+                    b.tile.getLinkedTiles(t -> tilesB.add(t.pos()));
+                }
+            }
+
+            if(tilesA.isEmpty() || tilesB.isEmpty()) return null;
+
+            //compute bbox to limit BFS
+            int minx = w, miny = h, maxx = -1, maxy = -1;
+            for(int i = 0; i < tilesA.size; i++){
+                int pos = tilesA.get(i);
+                int x = Point2.x(pos);
+                int y = Point2.y(pos);
+                if(x < minx) minx = x;
+                if(y < miny) miny = y;
+                if(x > maxx) maxx = x;
+                if(y > maxy) maxy = y;
+            }
+            IntSeq tilesBSeq = new IntSeq();
+            tilesB.each(tilesBSeq::add);
+            for(int i = 0; i < tilesBSeq.size; i++){
+                int pos = tilesBSeq.get(i);
+                int x = Point2.x(pos);
+                int y = Point2.y(pos);
+                if(x < minx) minx = x;
+                if(y < miny) miny = y;
+                if(x > maxx) maxx = x;
+                if(y > maxy) maxy = y;
+            }
+
+            int margin = (int)Math.ceil((range / tilesize) * 2f) + 2;
+            int bx0 = Math.max(0, minx - margin);
+            int by0 = Math.max(0, miny - margin);
+            int bx1 = Math.min(w - 1, maxx + margin);
+            int by1 = Math.min(h - 1, maxy + margin);
+            int bw = bx1 - bx0 + 1;
+            int bh = by1 - by0 + 1;
+            int area = bw * bh;
+
+            //visited + predecessor within bbox coordinates
+            boolean[] visited = new boolean[area];
+            int[] prev = new int[area];
+            Arrays.fill(prev, -1);
+            IntQueue q = new IntQueue();
+
+            //seed queue with all A tiles
+            for(int i = 0; i < tilesA.size; i++){
+                int pos = tilesA.get(i);
+                int x = Point2.x(pos);
+                int y = Point2.y(pos);
+                if(x < bx0 || y < by0 || x > bx1 || y > by1) continue;
+                int lx = x - bx0, ly = y - by0;
+                int li = lx + ly * bw;
+                if(!visited[li]){
+                    visited[li] = true;
+                    q.addLast(li);
+                }
+            }
+
+            int hitLocal = -1;
+            int hitWorldPos = -1;
+
+            while(q.size > 0){
+                int li = q.removeFirst();
+                int lx = li % bw;
+                int ly = li / bw;
+                int wx = bx0 + lx;
+                int wy = by0 + ly;
+                int wpos = Point2.pack(wx, wy);
+
+                if(tilesB.contains(wpos)){
+                    hitLocal = li;
+                    hitWorldPos = wpos;
+                    break;
+                }
+
+                //4-dir
+                expandBfs(li, lx + 1, ly, bw, bh, visited, prev, q);
+                expandBfs(li, lx - 1, ly, bw, bh, visited, prev, q);
+                expandBfs(li, lx, ly + 1, bw, bh, visited, prev, q);
+                expandBfs(li, lx, ly - 1, bw, bh, visited, prev, q);
+            }
+
+            if(hitLocal == -1 || hitWorldPos == -1) return null;
+
+            //trace back to nearest A tile in bbox
+            int cur = hitLocal;
+            int last = cur;
+            while(prev[cur] != -1){
+                last = cur;
+                cur = prev[cur];
+            }
+
+            //cur is some seed tile; translate to world
+            int axTile = bx0 + (cur % bw);
+            int ayTile = by0 + (cur / bw);
+            int bxTile = Point2.x(hitWorldPos);
+            int byTile = Point2.y(hitWorldPos);
+
+            float ax = (axTile + 0.5f) * tilesize;
+            float ay = (ayTile + 0.5f) * tilesize;
+            float bx = (bxTile + 0.5f) * tilesize;
+            float by = (byTile + 0.5f) * tilesize;
+
+            float dist = Mathf.dst(ax, ay, bx, by);
+            if(dist > range * 2f){
+                //still return midpoint, but it may require multiple nodes
+            }
+
+            float midX = (ax + bx) / 2f;
+            float midY = (ay + by) / 2f;
+
+            //snap midpoint to nearest tile center
+            int mx = Mathf.clamp((int)(midX / tilesize), 0, w - 1);
+            int my = Mathf.clamp((int)(midY / tilesize), 0, h - 1);
+            float snapX = (mx + 0.5f) * tilesize;
+            float snapY = (my + 0.5f) * tilesize;
+
+            ReconnectResult res = new ReconnectResult();
+            res.ax = ax; res.ay = ay; res.bx = bx; res.by = by;
+            res.midX = snapX; res.midY = snapY;
+            return res;
+        }
+
+        private int expandBfs(int from, int nx, int ny, int bw, int bh, boolean[] visited, int[] prev, IntQueue q){
+            if(nx < 0 || ny < 0 || nx >= bw || ny >= bh) return -1;
+            int ni = nx + ny * bw;
+            if(visited[ni]) return -1;
+            visited[ni] = true;
+            prev[ni] = from;
+            q.addLast(ni);
+            return -1;
+        }
+    }
+
+    private static class ReconnectResult{
+        float midX, midY;
+        float ax, ay, bx, by;
+    }
+}

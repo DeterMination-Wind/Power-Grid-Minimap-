@@ -1,0 +1,25 @@
+plugins{
+    id "java"
+}
+
+group = "powergridminimap"
+version = "0.1.0"
+
+dependencies{
+    // Build against this Mindustry source checkout.
+    compileOnly project(":core")
+}
+
+tasks.withType(JavaCompile).configureEach{
+    options.encoding = "UTF-8"
+}
+
+tasks.register("zipMod", Zip){
+    group = "build"
+    description = "Packages the mod as a .zip for Mindustry."
+    dependsOn classes
+    archiveFileName = "${project.name}.zip"
+    destinationDirectory = layout.buildDirectory.dir("libs")
+    from(sourceSets.main.output)
+    from("README.md")
+}
