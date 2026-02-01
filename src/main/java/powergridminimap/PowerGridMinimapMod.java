@@ -46,10 +46,12 @@ import mindustry.game.EventType.WorldLoadEvent;
 import mindustry.game.EventType.Trigger;
 import mindustry.graphics.Drawf;
 import mindustry.gen.Player;
+import mindustry.mod.Scripts;
 import mindustry.ui.Fonts;
 import mindustry.world.blocks.power.PowerNode;
 import mindustry.world.blocks.power.PowerGraph;
 import mindustry.mod.Mods;
+import rhino.ScriptableObject;
 
 import java.lang.reflect.Field;
 import java.util.Arrays;
@@ -97,6 +99,8 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
     private final SplitAlert alert = new SplitAlert();
     private final MindustryXMarkers xMarkers = new MindustryXMarkers();
     private final Mi2MinimapIntegration mi2 = new Mi2MinimapIntegration();
+    private final PgmmConsoleApi consoleApi = new PgmmConsoleApi(this);
+    private boolean consoleApiLogged = false;
 
     public PowerGridMinimapMod(){
         Events.on(ClientLoadEvent.class, e -> {
@@ -120,6 +124,8 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             refreshReconnectColor();
             xMarkers.tryInit();
             mi2.tryInit();
+            installConsoleApi();
+            Time.runTask(10f, this::installConsoleApi);
             Time.runTask(10f, this::ensureOverlayAttached);
         });
 
@@ -149,6 +155,22 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
 
         //draw on top of the full-screen minimap (opened via M).
         Events.run(Trigger.uiDrawEnd, this::drawFullMinimapOverlay);
+    }
+
+    private void installConsoleApi(){
+        if(mindustry.Vars.headless) return;
+        if(mindustry.Vars.mods == null) return;
+        try{
+            Scripts scripts = mindustry.Vars.mods.getScripts();
+            if(scripts == null || scripts.scope == null) return;
+            ScriptableObject.putProperty(scripts.scope, "pgmm", rhino.Context.javaToJS(consoleApi, scripts.scope));
+            if(!consoleApiLogged){
+                consoleApiLogged = true;
+                Log.info("PGMM: F8 console API installed. Try: pgmm.help()");
+            }
+        }catch(Throwable t){
+            Log.err("PGMM: failed to install F8 console API.", t);
+        }
     }
 
     @Override
@@ -184,6 +206,51 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             refreshMi2Overlay("refresh".equals(mode));
             if(player != null) player.sendMessage("[accent]PGMM MI2 overlay: " + mode + "[]");
         });
+    }
+
+    /** F8 console helper object: use {@code pgmm.help()} / {@code pgmm.restart()} / {@code pgmm.rescan()} / {@code pgmm.mi2Refresh()}. */
+    public static class PgmmConsoleApi{
+        private final PowerGridMinimapMod mod;
+
+        PgmmConsoleApi(PowerGridMinimapMod mod){
+            this.mod = mod;
+        }
+
+        public String help(){
+            return "PGMM console API:\n" +
+                "  pgmm.restart()     - restart PGMM (clear cache + reattach overlays)\n" +
+                "  pgmm.rescan()      - rescan grids immediately (ignore update delay)\n" +
+                "  pgmm.mi2Refresh()  - re-detect MI2 + reattach overlay (if enabled)\n" +
+                "  pgmm.mi2On()       - enable MI2 overlay + refresh\n" +
+                "  pgmm.mi2Off()      - disable MI2 overlay + detach";
+        }
+
+        public String restart(){
+            mod.restartMod();
+            return "PGMM restarted.";
+        }
+
+        public String rescan(){
+            mod.rescanNow();
+            return "PGMM rescan requested.";
+        }
+
+        public String mi2Refresh(){
+            mod.refreshMi2Overlay(true);
+            return "PGMM MI2 overlay refresh requested.";
+        }
+
+        public String mi2On(){
+            Core.settings.put(keyDrawOnMi2Minimap, true);
+            mod.refreshMi2Overlay(true);
+            return "PGMM MI2 overlay enabled.";
+        }
+
+        public String mi2Off(){
+            Core.settings.put(keyDrawOnMi2Minimap, false);
+            mod.refreshMi2Overlay(false);
+            return "PGMM MI2 overlay disabled.";
+        }
     }
 
     /** "Soft restart" for debugging: clears caches/state and reattaches overlays. */
