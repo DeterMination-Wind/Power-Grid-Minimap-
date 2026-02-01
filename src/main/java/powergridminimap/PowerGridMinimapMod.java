@@ -17,6 +17,7 @@ import arc.scene.ui.layout.Table;
 import arc.struct.ObjectSet;
 import arc.struct.Seq;
 import arc.util.Align;
+import arc.util.CommandHandler;
 import arc.util.Time;
 import arc.util.Tmp;
 import arc.util.pooling.Pools;
@@ -44,6 +45,7 @@ import mindustry.game.EventType.ConfigEvent;
 import mindustry.game.EventType.WorldLoadEvent;
 import mindustry.game.EventType.Trigger;
 import mindustry.graphics.Drawf;
+import mindustry.gen.Player;
 import mindustry.ui.Fonts;
 import mindustry.world.blocks.power.PowerNode;
 import mindustry.world.blocks.power.PowerGraph;
@@ -147,6 +149,99 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
 
         //draw on top of the full-screen minimap (opened via M).
         Events.run(Trigger.uiDrawEnd, this::drawFullMinimapOverlay);
+    }
+
+    @Override
+    public void registerClientCommands(CommandHandler handler){
+        handler.<Player>register("pgmm-restart", "Restart Power Grid Minimap (clear cache + reattach overlays).", (args, player) -> {
+            restartMod();
+            if(player != null) player.sendMessage("[accent]PGMM restarted.");
+        });
+
+        handler.<Player>register("pgmm-rescan", "Force immediate power-grid rescan + overlay rebuild.", (args, player) -> {
+            rescanNow();
+            if(player != null) player.sendMessage("[accent]PGMM rescan requested.");
+        });
+
+        handler.<Player>register("pgmm-mi2", "[on/off/refresh]", "MI2 minimap overlay control (refresh = re-detect + reattach).", (args, player) -> {
+            String mode = args.length == 0 ? "refresh" : args[0].toLowerCase();
+
+            switch(mode){
+                case "on":
+                    Core.settings.put(keyDrawOnMi2Minimap, true);
+                    break;
+                case "off":
+                    Core.settings.put(keyDrawOnMi2Minimap, false);
+                    break;
+                case "refresh":
+                    //leave setting as-is
+                    break;
+                default:
+                    if(player != null) player.sendMessage("[scarlet]Usage: /pgmm-mi2 [on/off/refresh]");
+                    return;
+            }
+
+            refreshMi2Overlay("refresh".equals(mode));
+            if(player != null) player.sendMessage("[accent]PGMM MI2 overlay: " + mode + "[]");
+        });
+    }
+
+    /** "Soft restart" for debugging: clears caches/state and reattaches overlays. */
+    public void restartMod(){
+        Log.info("PGMM: restart requested.");
+
+        try{
+            refreshMarkerColor();
+            refreshReconnectColor();
+        }catch(Throwable ignored){
+        }
+
+        try{
+            cache.clear();
+            cache.forceRebuildNow();
+        }catch(Throwable ignored){
+        }
+
+        try{
+            alert.clear();
+        }catch(Throwable ignored){
+        }
+
+        try{
+            splitWatcher.reset();
+        }catch(Throwable ignored){
+        }
+
+        try{
+            nextAttachAttempt = 0f;
+            ensureOverlayAttached();
+        }catch(Throwable ignored){
+        }
+
+        try{
+            mi2.ensureAttached(cache, markerColor, alert);
+        }catch(Throwable ignored){
+        }
+    }
+
+    /** Forces an immediate rescan/rebuild, bypassing the update delay. */
+    public void rescanNow(){
+        Log.info("PGMM: rescan requested.");
+        cache.forceRebuildNow();
+        cache.updateBasic();
+        cache.updateFullOverlay();
+    }
+
+    /** Re-detects MI2 and reattaches the MI2 overlay (if enabled). */
+    public void refreshMi2Overlay(boolean forceRedetect){
+        Log.info("PGMM: MI2 overlay refresh requested (forceRedetect=@).", forceRedetect);
+        if(forceRedetect){
+            mi2.tryInit();
+        }
+        mi2.detachIfPresent();
+        mi2.ensureAttached(cache, markerColor, alert);
+        //ensure something is available to draw immediately
+        rescanNow();
     }
 
     private void registerSettings(){
@@ -1037,6 +1132,14 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             nextFullUpdateTime = Time.time + wait;
         }
 
+        /** Bypasses update delay and forces next updateBasic/updateFullOverlay to rebuild immediately. */
+        public void forceRebuildNow(){
+            basicDirty = true;
+            fullDirty = true;
+            nextUpdateTime = 0f;
+            nextFullUpdateTime = 0f;
+        }
+
         public void updateBasic(){
             if(!state.isGame() || world == null || world.isGenerating() || player == null){
                 clear();
@@ -1684,6 +1787,11 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
         private ReconnectHint hint;
         private float textExpiresAt = 0f;
 
+        void clear(){
+            hint = null;
+            textExpiresAt = 0f;
+        }
+
         void trigger(int graphA, int graphB, float midWorldX, float midWorldY, float ax, float ay, float bx, float by){
             ReconnectHint h = new ReconnectHint();
             h.graphA = graphA;
@@ -1787,6 +1895,14 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
         private final IntSeq tmpToRemove = new IntSeq();
 
         private float nextScan = 0f;
+
+        void reset(){
+            lastGraphByBuildPos.clear();
+            lastGraphPowerIn.clear();
+            lastSplitTime.clear();
+            pendingSplits.clear();
+            nextScan = 0f;
+        }
 
         void update(){
             if(Time.time < nextScan) return;
