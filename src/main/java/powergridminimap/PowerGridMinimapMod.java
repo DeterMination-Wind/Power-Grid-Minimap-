@@ -61,13 +61,14 @@ import static mindustry.Vars.world;
 
 public class PowerGridMinimapMod extends mindustry.mod.Mod{
     private static final String overlayName = "pgmm-overlay";
-    private static final String mi2OverlayName = "pgmm-mi2-overlay";
+    private static final String mi2OverlayName = "pgmm-overlay-mi2-minimap";
 
     private static final String keyEnabled = "pgmm-enabled";
     private static final String keyGridAlpha = "pgmm-gridalpha";
     private static final String keyMarkerScale = "pgmm-markerscale";
     private static final String keyMarkerColor = "pgmm-markercolor";
     private static final String keyHudMarkerFollowScale = "pgmm-hudmarkerscale";
+    private static final String keyShowBalance = "pgmm-showbalance";
     private static final String keyDrawOnMi2Minimap = "pgmm-mi2minimap";
     private static final String keyClaimDistance = "pgmm-claimdistance";
     private static final String keySplitAlertThreshold = "pgmm-splitalertthreshold";
@@ -75,6 +76,8 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
     private static final String keyClusterMarkerDistance = "pgmm-clustermarkerdistance";
     private static final String keyReconnectStroke = "pgmm-markerstroke";
     private static final String keyReconnectColor = "pgmm-markerlinecolor";
+    //debounce cache rebuilds after block changes (tenths of a second)
+    private static final String keyUpdateWaitTenths = "pgmm-updatewait";
 
     private final PowerGridCache cache = new PowerGridCache();
     private final Color markerColor = new Color(Color.white);
@@ -100,6 +103,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             Core.settings.defaults(keyMarkerScale, 100);
             Core.settings.defaults(keyMarkerColor, "ffffff");
             Core.settings.defaults(keyHudMarkerFollowScale, 100);
+            Core.settings.defaults(keyShowBalance, true);
             Core.settings.defaults(keyDrawOnMi2Minimap, false);
             Core.settings.defaults(keyClaimDistance, 5);
             Core.settings.defaults(keySplitAlertThreshold, 10000);
@@ -107,6 +111,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             Core.settings.defaults(keyClusterMarkerDistance, 15);
             Core.settings.defaults(keyReconnectStroke, 2);
             Core.settings.defaults(keyReconnectColor, "ffa500");
+            Core.settings.defaults(keyUpdateWaitTenths, 10);
 
             registerSettings();
             refreshMarkerColor();
@@ -147,9 +152,19 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
     private void registerSettings(){
         if(ui == null || ui.settings == null) return;
 
-        ui.settings.addCategory("@pgmm.category", table -> {
+        String defaultCategory = "Power Grid Minimap";
+        try{
+            //fallback in case bundles fail to load / missing key
+            if(Core.bundle != null && Core.bundle.getLocale() != null && "zh".equals(Core.bundle.getLocale().getLanguage())){
+                defaultCategory = "电网小地图";
+            }
+        }catch(Throwable ignored){
+        }
+
+        ui.settings.addCategory(Core.bundle.get("pgmm.category", defaultCategory), table -> {
             table.checkPref(keyEnabled, true);
             table.sliderPref(keyGridAlpha, 40, 0, 100, 5, v -> v + "%");
+            table.checkPref(keyShowBalance, true);
             table.sliderPref(keyMarkerScale, 100, 50, 300, 10, v -> v + "%");
             table.textPref(keyMarkerColor, "ffffff", v -> refreshMarkerColor());
             table.sliderPref(keyHudMarkerFollowScale, 100, 0, 200, 10, v -> v + "%");
@@ -158,13 +173,15 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             table.row();
             arc.scene.ui.CheckBox mi2Box = new arc.scene.ui.CheckBox(Core.bundle.get("setting." + keyDrawOnMi2Minimap + ".name", "Draw on MI2 minimap"));
             ui.addDescTooltip(mi2Box, Core.bundle.getOrNull("setting." + keyDrawOnMi2Minimap + ".description"));
+            mi2Box.getLabel().setWrap(true);
+            mi2Box.getLabelCell().growX();
             mi2Box.changed(() -> {
                 Core.settings.put(keyDrawOnMi2Minimap, mi2Box.isChecked());
                 //If MI2 exists, attach/detach immediately; otherwise, no-op.
                 mi2.ensureAttached(cache, markerColor, alert);
             });
             mi2Box.update(() -> mi2Box.setChecked(Core.settings.getBool(keyDrawOnMi2Minimap, false)));
-            table.add(mi2Box).left().padTop(3f);
+            table.add(mi2Box).width(Math.min(Core.graphics.getWidth() / 1.2f, 460f)).left().padTop(3f);
             table.row();
 
             table.sliderPref(keyClaimDistance, 5, 1, 20, 1, v -> v + "");
@@ -173,6 +190,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             table.sliderPref(keyClusterMarkerDistance, 15, 0, 60, 1, v -> v + "");
             table.sliderPref(keyReconnectStroke, 2, 1, 8, 1, v -> v + "");
             table.textPref(keyReconnectColor, "ffa500", v -> refreshReconnectColor());
+            table.sliderPref(keyUpdateWaitTenths, 10, 0, 50, 1, v -> (v / 10f) + "s");
         });
     }
 
@@ -289,6 +307,8 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
     }
 
     private void drawBalanceMarkersOnFullMap(Rect viewRect, float invScale){
+        if(!Core.settings.getBool(keyShowBalance, true)) return;
+
         float markerScale = Core.settings.getInt(keyMarkerScale, 100) / 100f;
         if(markerScale <= 0.001f) return;
 
@@ -413,7 +433,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
 
             oldTransform.set(Draw.trans());
 
-            transform.idt();
+            transform.set(oldTransform);
             transform.translate(x, y);
             transform.scl(Tmp.v1.set(scale, height / viewRect.height));
             transform.translate(-viewRect.x, -viewRect.y);
@@ -459,6 +479,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
 
         private void drawBalanceMarkers(float invScale){
             if(player == null) return;
+            if(!Core.settings.getBool(keyShowBalance, true)) return;
 
             float markerScale = Core.settings.getInt(keyMarkerScale, 100) / 100f;
             if(markerScale <= 0.001f) return;
@@ -534,18 +555,17 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
 
     /** Optional integration with MI2-Utilities-Java minimap window. Uses reflection so missing MI2 won't crash. */
     private static class Mi2MinimapIntegration{
-        private boolean initialized = false;
         private boolean available = false;
 
         private ClassLoader mi2Loader;
         private java.lang.reflect.Field minimapField;
         private java.lang.reflect.Field rectField;
         private java.lang.reflect.Method setRectMethod;
+        private float nextInitAttempt = 0f;
 
         void tryInit(){
-            if(initialized) return;
-            initialized = true;
             try{
+                available = false;
                 //MI2 is a mod -> loaded in a separate classloader; find its loader and load classes through it.
                 Class<?> mm = null;
                 if(mindustry.Vars.mods != null){
@@ -571,7 +591,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
                 setRectMethod = minimapType.getMethod("setRect");
 
                 available = true;
-                Log.info("PGMM: MI2 minimap detected.");
+                Log.info("PGMM: MI2 minimap detected; overlay integration enabled.");
             }catch(Throwable ignored){
                 available = false;
             }
@@ -582,40 +602,74 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
         }
 
         void ensureAttached(PowerGridCache cache, Color markerColor, SplitAlert alert){
-            if(!available) return;
             if(!Core.settings.getBool(keyDrawOnMi2Minimap, false)){
                 detachIfPresent();
                 return;
             }
 
+            //MI2 can load later, and its minimap window can rebuild. Keep retrying initialization.
+            if(!available){
+                if(Time.time >= nextInitAttempt){
+                    nextInitAttempt = Time.time + 60f * 2f;
+                    tryInit();
+                }
+            }
+            if(!available) return;
+            if(Core.scene == null) return;
+
             try{
                 Object minimapObj = minimapField == null ? null : minimapField.get(null);
                 if(!(minimapObj instanceof Element)) return;
                 Element minimap = (Element)minimapObj;
-                if(minimap.parent == null) return;
-                if(!(minimap.parent instanceof Table)) return;
+                if(minimap.getScene() == null) return;
 
-                Table parent = (Table)minimap.parent;
-                if(parent.find(mi2OverlayName) != null) return;
+                //Attach to the scene root instead of minimap.parent:
+                //MI2's mindow can rebuild/replace its internal tables frequently, causing children to be dropped.
+                //By attaching to Core.scene, our overlay persists and just follows the minimap element bounds.
+                Element existing = null;
+                try{
+                    existing = Core.scene.find(mi2OverlayName);
+                }catch(Throwable ignored){
+                }
+                if(existing != null){
+                    //If base minimap element changed, replace overlay; otherwise keep it.
+                    if(existing instanceof Mi2Overlay){
+                        Mi2Overlay mo = (Mi2Overlay)existing;
+                        if(mo.base != minimap || mo.parent != minimap.parent){
+                            mo.remove();
+                            existing = null;
+                        }
+                    }else{
+                        existing.remove();
+                        existing = null;
+                    }
+                }
+                if(existing != null) return;
+                if(minimap.parent == null) return;
 
                 Mi2Overlay overlay = new Mi2Overlay(minimap, cache, markerColor, alert, rectField, setRectMethod);
                 overlay.name = mi2OverlayName;
+                overlay.setSize(1f, 1f);
                 overlay.touchable = Touchable.disabled;
-                parent.addChild(overlay);
+                minimap.parent.addChild(overlay);
+                overlay.toFront();
+                Log.info("PGMM: MI2 overlay attached to minimap parent (@).", minimap.parent.getClass().getName());
             }catch(Throwable t){
+                Log.err("PGMM: MI2 minimap attach failed; will retry.", t);
+                //don't permanently disable; allow retry on next attempt
+                nextInitAttempt = Time.time + 60f * 2f;
                 available = false;
-                Log.err("PGMM: MI2 minimap attach failed; disabling integration.", t);
             }
         }
 
         private void detachIfPresent(){
             try{
-                Object minimapObj = minimapField == null ? null : minimapField.get(null);
-                if(!(minimapObj instanceof Element)) return;
-                Element minimap = (Element)minimapObj;
-                if(!(minimap.parent instanceof Table)) return;
-                Table parent = (Table)minimap.parent;
-                Element existing = parent.find(mi2OverlayName);
+                if(Core.scene == null) return;
+                Element existing = null;
+                try{
+                    existing = Core.scene.find(mi2OverlayName);
+                }catch(Throwable ignored){
+                }
                 if(existing != null) existing.remove();
             }catch(Throwable ignored){
             }
@@ -634,6 +688,8 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
         private final Rect viewRect = new Rect();
         private final Mat transform = new Mat();
         private final Mat oldTransform = new Mat();
+        private boolean loggedDraw = false;
+        private boolean loggedClipFail = false;
 
         Mi2Overlay(Element base, PowerGridCache cache, Color markerColor, SplitAlert alert, java.lang.reflect.Field rectField, java.lang.reflect.Method setRectMethod){
             this.base = base;
@@ -645,25 +701,39 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
         }
 
         @Override
-        public void act(float delta){
-            if(base != null){
-                setBounds(base.x, base.y, base.getWidth(), base.getHeight());
-            }
-            super.act(delta);
-        }
-
-        @Override
         public void draw(){
             if(!Core.settings.getBool(keyEnabled, true)) return;
             if(!Core.settings.getBool(keyDrawOnMi2Minimap, false)) return;
             if(renderer == null || renderer.minimap == null || renderer.minimap.getRegion() == null) return;
             if(world == null || !state.isGame() || world.isGenerating()) return;
-            if(base == null || base.parent == null) return;
+            if(base == null || base.getScene() == null) return;
+            if(base.parent == null) return;
+
+            //We are a sibling of MI2's minimap element; keep bounds synced so clipBegin() works.
+            float bw = base.getWidth(), bh = base.getHeight();
+            if(bw <= 0.001f || bh <= 0.001f){
+                bw = Math.max(bw, base.getPrefWidth());
+                bh = Math.max(bh, base.getPrefHeight());
+            }
+            if(bw <= 0.001f || bh <= 0.001f) return;
+            setBounds(base.x, base.y, bw, bh);
+
+            if(!loggedDraw){
+                loggedDraw = true;
+                Log.info("PGMM: MI2 overlay draw() active (name=@, base=@).", name, base.getClass().getName());
+            }
 
             cache.updateBasic();
             cache.updateFullOverlay();
 
-            if(!clipBegin()) return;
+            if(!clipBegin()){
+                if(!loggedClipFail){
+                    loggedClipFail = true;
+                    Log.info("PGMM: MI2 overlay clipBegin failed (x=@ y=@ w=@ h=@, baseW=@ baseH=@).",
+                        x, y, width, height, base.getWidth(), base.getHeight());
+                }
+                return;
+            }
 
             Rect r = getMi2Rect();
             if(r == null){
@@ -677,7 +747,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
 
             oldTransform.set(Draw.trans());
 
-            transform.idt();
+            transform.set(oldTransform);
             transform.translate(x, y);
             transform.scl(Tmp.v1.set(scale, height / viewRect.height));
             transform.translate(-viewRect.x, -viewRect.y);
@@ -728,6 +798,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
 
         private void drawBalanceMarkers(float invScale){
             if(player == null) return;
+            if(!Core.settings.getBool(keyShowBalance, true)) return;
 
             float markerScale = Core.settings.getInt(keyMarkerScale, 100) / 100f;
             if(markerScale <= 0.001f) return;
@@ -852,8 +923,16 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
     }
 
     private static class PowerGridCache{
-        private static final float updateInterval = 30f;
-        private static final float fullUpdateMinInterval = 60f;
+        private static float updateWaitTicks(){
+            //Stored as tenths of seconds to allow fine-grained tuning with sliderPref.
+            int tenths = Core.settings.getInt(keyUpdateWaitTenths, 10);
+            tenths = Mathf.clamp(tenths, 0, 600);
+            return tenths / 10f * 60f;
+        }
+
+        private static float fullUpdateMinTicks(){
+            return Math.max(60f, updateWaitTicks());
+        }
 
         private final ObjectSet<PowerGraph> graphs = new ObjectSet<>();
         private final Seq<GridInfo> grids = new Seq<>();
@@ -953,8 +1032,9 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
         public void invalidateAll(){
             basicDirty = true;
             fullDirty = true;
-            nextUpdateTime = 0f;
-            nextFullUpdateTime = 0f;
+            float wait = updateWaitTicks();
+            nextUpdateTime = Time.time + wait;
+            nextFullUpdateTime = Time.time + wait;
         }
 
         public void updateBasic(){
@@ -963,14 +1043,17 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
                 return;
             }
 
+            if(basicDirty && Time.time < nextUpdateTime) return;
             if(!basicDirty && Time.time < nextUpdateTime) return;
             if(!basicDirty && Time.time >= nextUpdateTime){
                 // If nothing invalidated the cache, avoid rescanning the whole map repeatedly.
-                nextUpdateTime = Time.time + updateInterval * 6f;
+                float wait = updateWaitTicks();
+                nextUpdateTime = Time.time + wait * 6f;
                 return;
             }
 
-            nextUpdateTime = Time.time + updateInterval;
+            float wait = updateWaitTicks();
+            nextUpdateTime = Time.time + wait;
             basicDirty = false;
 
             graphs.clear();
@@ -1034,8 +1117,6 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             //Flood-fill connected components on the tile grid, using 4-neighbor adjacency.
             //If clusters are close together (< threshold tiles), draw a single marker at the whole-graph center.
             //If clusters are far apart (> threshold tiles), draw one marker per cluster.
-            int maxMarkersPerGraph = 64;
-
             tmpVisited.clear();
             tmpQueue.clear();
             tmpClusters.clear();
@@ -1107,13 +1188,14 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             //- cut edges whose weight > thresholdTiles
             //- each connected component becomes a rectangle (bbox union)
             int n = tmpClusters.size;
-            int[] parent = new int[n];
-            float[] parentW = new float[n];
-            boolean[] used = new boolean[n];
-            float[] best = new float[n];
-            Arrays.fill(parent, -1);
-            Arrays.fill(parentW, 0f);
-            Arrays.fill(best, Float.POSITIVE_INFINITY);
+            int[] parent = mstParent;
+            float[] parentW = mstParentW;
+            boolean[] used = mstUsed;
+            float[] best = mstBest;
+            Arrays.fill(parent, 0, n, -1);
+            Arrays.fill(parentW, 0, n, 0f);
+            Arrays.fill(used, 0, n, false);
+            Arrays.fill(best, 0, n, Float.POSITIVE_INFINITY);
             best[0] = 0f;
 
             for(int iter = 0; iter < n; iter++){
@@ -1146,9 +1228,9 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             }
 
             //build adjacency from MST edges that pass the threshold (or all edges if threshold <= 0)
-            IntSeq[] adj = new IntSeq[n];
+            IntSeq[] adj = mstAdj;
             for(int i = 0; i < n; i++){
-                adj[i] = new IntSeq();
+                adj[i].clear();
             }
             for(int i = 1; i < n; i++){
                 int p = parent[i];
@@ -1159,7 +1241,8 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
                 adj[p].add(i);
             }
 
-            boolean[] compVisited = new boolean[n];
+            boolean[] compVisited = mstCompVisited;
+            Arrays.fill(compVisited, 0, n, false);
             int maxRectsPerGraph = 64;
 
             for(int si = 0; si < n; si++){
@@ -1249,8 +1332,8 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             }
 
             if(!fullDirty) return;
-            if(Time.time < nextFullUpdateTime) return;
-            nextFullUpdateTime = Time.time + fullUpdateMinInterval;
+            if(fullDirty && Time.time < nextFullUpdateTime) return;
+            nextFullUpdateTime = Time.time + fullUpdateMinTicks();
             fullDirty = false;
 
             lastClaimDistance = claimDistance;
@@ -1444,85 +1527,92 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
 
             float alpha = Mathf.clamp(gridAlphaInt / 100f);
 
-            for(int gi = 0; gi < grids.size; gi++){
+            //Precompute colors per grid once, then scan tiles once.
+            int gridCount = grids.size;
+            int[] baseRgbaByGrid = new int[gridCount];
+            int[] darkRgbaByGrid = new int[gridCount];
+            int[] lightRgbaByGrid = new int[gridCount];
+            for(int gi = 0; gi < gridCount; gi++){
                 GridInfo info = grids.get(gi);
                 Color base = MinimapOverlay.colorForGraph(info.colorKey, Tmp.c1);
                 Color dark = Tmp.c2.set(base).mul(0.55f);
                 Color light = Tmp.c3.set(base).lerp(Color.white, 0.75f);
+                baseRgbaByGrid[gi] = Tmp.c4.set(base.r, base.g, base.b, alpha).rgba();
+                darkRgbaByGrid[gi] = Tmp.c4.set(dark.r, dark.g, dark.b, alpha).rgba();
+                lightRgbaByGrid[gi] = Tmp.c4.set(light.r, light.g, light.b, alpha * 0.45f).rgba();
+            }
 
-                for(int idx = 0; idx < tileCount; idx++){
-                    if(ownerClaim[idx] != gi || visited[idx]) continue;
+            for(int idx = 0; idx < tileCount; idx++){
+                int gi = ownerClaim[idx];
+                if(gi < 0 || visited[idx]) continue;
 
-                    //BFS component gather + bbox
-                    comp.clear();
-                    bfs.clear();
-                    bfs.addLast(idx);
-                    visited[idx] = true;
+                //BFS component gather + bbox (for this grid)
+                comp.clear();
+                bfs.clear();
+                bfs.addLast(idx);
+                visited[idx] = true;
 
-                    int minx = w, miny = h, maxx = -1, maxy = -1;
+                int minx = w, miny = h, maxx = -1, maxy = -1;
 
-                    while(bfs.size > 0){
-                        int cur = bfs.removeFirst();
-                        comp.add(cur);
-                        int x = cur % w;
-                        int y = cur / w;
-                        if(x < minx) minx = x;
-                        if(y < miny) miny = y;
-                        if(x > maxx) maxx = x;
-                        if(y > maxy) maxy = y;
+                while(bfs.size > 0){
+                    int cur = bfs.removeFirst();
+                    comp.add(cur);
+                    int x = cur % w;
+                    int y = cur / w;
+                    if(x < minx) minx = x;
+                    if(y < miny) miny = y;
+                    if(x > maxx) maxx = x;
+                    if(y > maxy) maxy = y;
 
-                        //neighbors
-                        int n;
-                        if(x + 1 < w && !visited[n = cur + 1] && ownerClaim[n] == gi){ visited[n] = true; bfs.addLast(n); }
-                        if(x - 1 >= 0 && !visited[n = cur - 1] && ownerClaim[n] == gi){ visited[n] = true; bfs.addLast(n); }
-                        if(y + 1 < h && !visited[n = cur + w] && ownerClaim[n] == gi){ visited[n] = true; bfs.addLast(n); }
-                        if(y - 1 >= 0 && !visited[n = cur - w] && ownerClaim[n] == gi){ visited[n] = true; bfs.addLast(n); }
-                    }
+                    //neighbors
+                    int n;
+                    if(x + 1 < w && !visited[n = cur + 1] && ownerClaim[n] == gi){ visited[n] = true; bfs.addLast(n); }
+                    if(x - 1 >= 0 && !visited[n = cur - 1] && ownerClaim[n] == gi){ visited[n] = true; bfs.addLast(n); }
+                    if(y + 1 < h && !visited[n = cur + w] && ownerClaim[n] == gi){ visited[n] = true; bfs.addLast(n); }
+                    if(y - 1 >= 0 && !visited[n = cur - w] && ownerClaim[n] == gi){ visited[n] = true; bfs.addLast(n); }
+                }
 
-                    if(comp.isEmpty()) continue;
+                if(comp.isEmpty()) continue;
 
-                    //expand bbox by 1 to allow outside fill
-                    int bx0 = Math.max(0, minx - 1);
-                    int by0 = Math.max(0, miny - 1);
-                    int bx1 = Math.min(w - 1, maxx + 1);
-                    int by1 = Math.min(h - 1, maxy + 1);
+                //expand bbox by 1 to allow outside fill
+                int bx0 = Math.max(0, minx - 1);
+                int by0 = Math.max(0, miny - 1);
+                int bx1 = Math.min(w - 1, maxx + 1);
+                int by1 = Math.min(h - 1, maxy + 1);
 
-                    int bw = bx1 - bx0 + 1;
-                    int bh = by1 - by0 + 1;
-                    //rectangular-biased render:
-                    //- fill the whole (expanded) bounding box area with light color
-                    //- draw a dark border around the rectangle (closed shape)
-                    //- draw claimed building tiles with base color; border tiles with dark color
-                    int baseRgba = Tmp.c4.set(base.r, base.g, base.b, alpha).rgba();
-                    int darkRgba = Tmp.c4.set(dark.r, dark.g, dark.b, alpha).rgba();
-                    int lightRgba = Tmp.c4.set(light.r, light.g, light.b, alpha * 0.45f).rgba();
+                //rectangular-biased render:
+                //- fill the whole (expanded) bounding box area with light color
+                //- draw a dark border around the rectangle (closed shape)
+                //- draw claimed building tiles with base color; border tiles with dark color
+                int baseRgba = baseRgbaByGrid[gi];
+                int darkRgba = darkRgbaByGrid[gi];
+                int lightRgba = lightRgbaByGrid[gi];
 
-                    for(int wy = by0; wy <= by1; wy++){
-                        int yOff = wy * w;
-                        boolean edgeY = wy == by0 || wy == by1;
-                        for(int wx = bx0; wx <= bx1; wx++){
-                            int widx = wx + yOff;
+                for(int wy = by0; wy <= by1; wy++){
+                    int yOff = wy * w;
+                    boolean edgeY = wy == by0 || wy == by1;
+                    for(int wx = bx0; wx <= bx1; wx++){
+                        int widx = wx + yOff;
 
-                            //don't overwrite other grids' claimed buildings
-                            if(claimedBuild[widx] && ownerClaim[widx] != gi) continue;
+                        //don't overwrite other grids' claimed buildings
+                        if(claimedBuild[widx] && ownerClaim[widx] != gi) continue;
 
-                            boolean edge = edgeY || wx == bx0 || wx == bx1;
-                            boolean isBuild = claimedBuild[widx] && ownerClaim[widx] == gi;
+                        boolean edge = edgeY || wx == bx0 || wx == bx1;
+                        boolean isBuild = claimedBuild[widx] && ownerClaim[widx] == gi;
 
-                            //avoid messy overlaps between rectangles: only paint empty tiles if unowned yet
-                            if(!isBuild && overlayOwner[widx] != -1 && overlayOwner[widx] != gi) continue;
+                        //avoid messy overlaps between rectangles: only paint empty tiles if unowned yet
+                        if(!isBuild && overlayOwner[widx] != -1 && overlayOwner[widx] != gi) continue;
 
-                            int rgba;
-                            if(isBuild){
-                                rgba = edge ? darkRgba : baseRgba;
-                            }else{
-                                rgba = edge ? darkRgba : lightRgba;
-                            }
+                        int rgba;
+                        if(isBuild){
+                            rgba = edge ? darkRgba : baseRgba;
+                        }else{
+                            rgba = edge ? darkRgba : lightRgba;
+                        }
 
-                            fullOverlayPixmap.set(wx, h - 1 - wy, rgba);
-                            if(!isBuild){
-                                overlayOwner[widx] = gi;
-                            }
+                        fullOverlayPixmap.set(wx, h - 1 - wy, rgba);
+                        if(!isBuild){
+                            overlayOwner[widx] = gi;
                         }
                     }
                 }
@@ -1688,6 +1778,8 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
 
         //reused temp structures to reduce GC pressure
         private final IntMap<IntSet> prevToNew = new IntMap<>();
+        private final Seq<IntSet> prevToNewSetPool = new Seq<>();
+        private int prevToNewSetPoolUsed = 0;
         private final IntMap<Float> currentPowerIn = new IntMap<>();
         private final IntMap<Float> currentBalance = new IntMap<>();
         private final IntSet currentIds = new IntSet();
@@ -1712,11 +1804,9 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             int windowSeconds = Core.settings.getInt(keySplitAlertWindowSeconds, 4);
             float windowFrames = Math.max(1f, windowSeconds) * 60f;
 
-            //clear temp maps; reuse IntSet instances stored in prevToNew
-            for(IntMap.Entry<IntSet> e : prevToNew){
-                if(e.value != null) e.value.clear();
-            }
+            //clear temp maps; reuse IntSet instances via pool
             prevToNew.clear();
+            prevToNewSetPoolUsed = 0;
             currentPowerIn.clear();
             currentBalance.clear();
             currentIds.clear();
@@ -1740,7 +1830,10 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
                 if(prevId != Integer.MIN_VALUE && prevId != newId){
                     IntSet set = prevToNew.get(prevId);
                     if(set == null){
-                        set = new IntSet();
+                        set = prevToNewSetPoolUsed < prevToNewSetPool.size ? prevToNewSetPool.get(prevToNewSetPoolUsed) : new IntSet();
+                        if(prevToNewSetPoolUsed >= prevToNewSetPool.size) prevToNewSetPool.add(set);
+                        prevToNewSetPoolUsed++;
+                        set.clear();
                         prevToNew.put(prevId, set);
                     }
                     set.add(newId);
