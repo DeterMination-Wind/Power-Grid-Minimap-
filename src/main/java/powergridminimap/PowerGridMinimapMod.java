@@ -785,9 +785,8 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
                 Element minimap = (Element)minimapObj;
                 if(minimap.getScene() == null) return;
 
-                //Attach to the scene root instead of minimap.parent:
                 //MI2's mindow can rebuild/replace its internal tables frequently, causing children to be dropped.
-                //By attaching to Core.scene, our overlay persists and just follows the minimap element bounds.
+                //We attach as a sibling of the minimap element and keep retrying periodically.
                 Element existing = null;
                 try{
                     existing = Core.scene.find(mi2OverlayName);
@@ -811,7 +810,9 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
 
                 Mi2Overlay overlay = new Mi2Overlay(minimap, cache, markerColor, alert, rectField, setRectMethod);
                 overlay.name = mi2OverlayName;
-                overlay.setSize(1f, 1f);
+                //important: must have non-zero bounds BEFORE parent culling, otherwise draw() may never run.
+                overlay.setBounds(minimap.x, minimap.y, Math.max(1f, minimap.getWidth()), Math.max(1f, minimap.getHeight()));
+                overlay.update(overlay::syncBoundsToBase);
                 overlay.touchable = Touchable.disabled;
                 minimap.parent.addChild(overlay);
                 overlay.toFront();
@@ -848,8 +849,6 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
         private final java.lang.reflect.Method setRectMethod;
 
         private final Rect viewRect = new Rect();
-        private final Mat transform = new Mat();
-        private final Mat oldTransform = new Mat();
         private boolean loggedDraw = false;
         private boolean loggedClipFail = false;
 
@@ -862,6 +861,17 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             this.setRectMethod = setRectMethod;
         }
 
+        void syncBoundsToBase(){
+            if(base == null || parent == null) return;
+            float bw = base.getWidth(), bh = base.getHeight();
+            if(bw <= 0.001f || bh <= 0.001f){
+                bw = Math.max(bw, base.getPrefWidth());
+                bh = Math.max(bh, base.getPrefHeight());
+            }
+            if(bw <= 0.001f || bh <= 0.001f) return;
+            setBounds(base.x, base.y, bw, bh);
+        }
+
         @Override
         public void draw(){
             if(!Core.settings.getBool(keyEnabled, true)) return;
@@ -871,14 +881,8 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             if(base == null || base.getScene() == null) return;
             if(base.parent == null) return;
 
-            //We are a sibling of MI2's minimap element; keep bounds synced so clipBegin() works.
-            float bw = base.getWidth(), bh = base.getHeight();
-            if(bw <= 0.001f || bh <= 0.001f){
-                bw = Math.max(bw, base.getPrefWidth());
-                bh = Math.max(bh, base.getPrefHeight());
-            }
-            if(bw <= 0.001f || bh <= 0.001f) return;
-            setBounds(base.x, base.y, bw, bh);
+            syncBoundsToBase();
+            if(width <= 0.001f || height <= 0.001f) return;
 
             if(!loggedDraw){
                 loggedDraw = true;
@@ -904,25 +908,28 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             }
             viewRect.set(r);
 
-            float scale = width / viewRect.width;
-            float invScale = 1f / scale;
+            float scaleX = width / viewRect.width;
+            float scaleY = height / viewRect.height;
+            //MI2 maintains rect aspect ratio, so X/Y scales should match; use X as canonical.
+            float scale = scaleX;
+            float invScale = 1f / Math.max(0.000001f, scale);
 
-            oldTransform.set(Draw.trans());
-
-            transform.set(oldTransform);
-            transform.translate(x, y);
-            transform.scl(Tmp.v1.set(scale, height / viewRect.height));
-            transform.translate(-viewRect.x, -viewRect.y);
-            transform.translate(tilesize / 2f, tilesize / 2f);
-            Draw.trans(transform);
-
-            //same visuals as vanilla HUD minimap overlay
+            //Match MI2's draw style: draw a cropped region in UI-space, not a world-space transform.
             Texture overlayTex = cache.getFullOverlayTexture();
             if(overlayTex != null){
                 overlayTex.setFilter(Texture.TextureFilter.nearest);
-                TextureRegion reg = Draw.wrap(overlayTex);
                 Draw.color(1f, 1f, 1f, parentAlpha);
-                Draw.rect(reg, world.width() * tilesize / 2f, world.height() * tilesize / 2f, world.width() * tilesize, world.height() * tilesize);
+                float invTexWidth = 1f / overlayTex.width / tilesize;
+                float invTexHeight = 1f / overlayTex.height / tilesize;
+                float pixmapy = world.height() * tilesize - (viewRect.y + viewRect.height);
+                Tmp.tr1.set(overlayTex);
+                Tmp.tr1.set(
+                    viewRect.x * invTexWidth,
+                    pixmapy * invTexHeight,
+                    (viewRect.x + viewRect.width) * invTexWidth,
+                    (pixmapy + viewRect.height) * invTexHeight
+                );
+                Draw.rect(Tmp.tr1, x + width / 2f, y + height / 2f, width, height);
             }
 
             float alpha = Mathf.clamp(Core.settings.getInt(keyGridAlpha, 40) / 100f) * parentAlpha;
@@ -933,17 +940,71 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
                 Color baseColor = MinimapOverlay.colorForGraph(mr.colorKey, Tmp.c1);
                 Color light = Tmp.c2.set(baseColor).lerp(Color.white, 0.75f);
                 Draw.color(light.r, light.g, light.b, rectAlpha);
-                Fill.rect(mr.worldRect.x + mr.worldRect.width / 2f, mr.worldRect.y + mr.worldRect.height / 2f, mr.worldRect.width, mr.worldRect.height);
+                float cx = x + (mr.worldRect.x + mr.worldRect.width / 2f - viewRect.x) * scaleX;
+                float cy = y + (mr.worldRect.y + mr.worldRect.height / 2f - viewRect.y) * scaleY;
+                Fill.rect(cx, cy, mr.worldRect.width * scaleX, mr.worldRect.height * scaleY);
             }
             Draw.color();
 
-            drawBalanceMarkers(invScale);
-            alert.drawHudMinimapMarker(invScale, viewRect);
-
-            Draw.trans(oldTransform);
+            drawBalanceMarkersScreen(scale, invScale);
+            alert.drawMinimapMarkerScreen(viewRect, x, y, scaleX, scaleY, parentAlpha);
             Draw.reset();
 
             clipEnd();
+        }
+
+        private void drawBalanceMarkersScreen(float scale, float invScale){
+            if(player == null) return;
+            if(!Core.settings.getBool(keyShowBalance, true)) return;
+
+            float markerScale = Core.settings.getInt(keyMarkerScale, 100) / 100f;
+            if(markerScale <= 0.001f) return;
+
+            float follow = Mathf.clamp(Core.settings.getInt(keyHudMarkerFollowScale, 100) / 100f, 0f, 2f);
+            float invScalePow = Mathf.pow(invScale, 1f - follow);
+
+            Font font = Fonts.outline;
+            GlyphLayout layout = Pools.obtain(GlyphLayout.class, GlyphLayout::new);
+
+            boolean ints = font.usesIntegerPositions();
+            font.setUseIntegerPositions(false);
+
+            //In the old (world-space) draw, scale was applied by Draw.trans(); here we fold it into the font scale.
+            float baseFontScale = (1f / 1.25f) / Math.max(0.0001f, Scl.scl(1f));
+            font.getData().setScale(baseFontScale * invScalePow * markerScale * scale);
+
+            Color textColor = Tmp.c2.set(markerColor);
+            textColor.a *= parentAlpha;
+
+            for(int i = 0; i < cache.markers.size; i++){
+                MarkerInfo info = cache.markers.get(i);
+                PowerGraph graph = info.graph;
+                if(graph == null) continue;
+                if(!viewRect.contains(info.x, info.y)) continue;
+
+                float balance = graph.getPowerBalance() * 60f;
+                String text = (balance >= 0f ? "+" : "") + UI.formatAmount((long)balance);
+
+                layout.setText(font, text);
+
+                float sx = x + (info.x - viewRect.x) * (width / viewRect.width);
+                float sy = y + (info.y - viewRect.y) * (height / viewRect.height);
+
+                float margin = 3f * invScalePow * markerScale * scale;
+
+                Draw.color(0f, 0f, 0f, 0.35f * parentAlpha);
+                Fill.rect(sx, sy, layout.width + margin * 2f, layout.height + margin * 2f);
+                Draw.color();
+
+                font.setColor(textColor);
+                font.draw(text, sx, sy + layout.height / 2f, 0, Align.center, false);
+            }
+
+            Draw.reset();
+            font.getData().setScale(1f);
+            font.setColor(Color.white);
+            font.setUseIntegerPositions(ints);
+            Pools.free(layout);
         }
 
         private Rect getMi2Rect(){
@@ -1894,6 +1955,27 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             Lines.circle(hint.worldX, hint.worldY, r);
             Lines.line(hint.endAx, hint.endAy, hint.worldX, hint.worldY);
             Lines.line(hint.endBx, hint.endBy, hint.worldX, hint.worldY);
+            Draw.reset();
+        }
+
+        void drawMinimapMarkerScreen(Rect viewRect, float uiX, float uiY, float scaleX, float scaleY, float alpha){
+            if(hint == null || Time.time > hint.expiresAt) return;
+            if(!viewRect.contains(hint.worldX, hint.worldY)) return;
+
+            float sx = uiX + (hint.worldX - viewRect.x) * scaleX;
+            float sy = uiY + (hint.worldY - viewRect.y) * scaleY;
+            float ax = uiX + (hint.endAx - viewRect.x) * scaleX;
+            float ay = uiY + (hint.endAy - viewRect.y) * scaleY;
+            float bx = uiX + (hint.endBx - viewRect.x) * scaleX;
+            float by = uiY + (hint.endBy - viewRect.y) * scaleY;
+
+            float r = tilesize * 2f;
+            Draw.z(Drawf.text() + 1f);
+            Draw.color(reconnectColor.r, reconnectColor.g, reconnectColor.b, reconnectColor.a * alpha);
+            Lines.stroke(Scl.scl(Core.settings.getInt(keyReconnectStroke, 2)));
+            Lines.circle(sx, sy, r);
+            Lines.line(ax, ay, sx, sy);
+            Lines.line(bx, by, sx, sy);
             Draw.reset();
         }
 

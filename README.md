@@ -22,4 +22,4 @@ Run this in the Mindustry-master repo root:
 ./gradlew.bat :powergrid-minimap:zipMod
 ```
 
-The zip will be in `mods/powergrid-minimap/build/libs/`.
+The zip will be in `Power-Grid-Minimap-repo-clone/build/libs/`.
