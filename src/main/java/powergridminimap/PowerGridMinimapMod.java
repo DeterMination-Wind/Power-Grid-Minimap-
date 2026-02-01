@@ -127,6 +127,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             installConsoleApi();
             Time.runTask(10f, this::installConsoleApi);
             Time.runTask(10f, this::ensureOverlayAttached);
+            GithubUpdateCheck.checkOnce();
         });
 
         Events.on(WorldLoadEvent.class, e -> {

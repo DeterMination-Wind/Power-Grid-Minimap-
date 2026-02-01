@@ -3,11 +3,22 @@ plugins{
 }
 
 group = "powergridminimap"
-version = "1.6.2"
+version = "1.6.3"
+
+repositories{
+    mavenCentral()
+    maven{ url "https://jitpack.io" }
+}
 
 dependencies{
-    // Build against this Mindustry source checkout.
-    compileOnly project(":core")
+    // Prefer building against a local Mindustry source checkout (as an included subproject).
+    if(rootProject.findProject(":core") != null){
+        compileOnly project(":core")
+    }else{
+        // Standalone build: fetch Mindustry core from JitPack.
+        def mindustryVersion = (findProperty("mindustryVersion") ?: "v154.3").toString()
+        compileOnly "com.github.Anuken.MindustryJitpack:core:$mindustryVersion"
+    }
 }
 
 tasks.withType(JavaCompile).configureEach{
@@ -22,4 +33,16 @@ tasks.register("zipMod", Zip){
     destinationDirectory = layout.buildDirectory.dir("libs")
     from(sourceSets.main.output)
     from("README.md")
+}
+
+tasks.register("copyZipToDist", Copy){
+    dependsOn(tasks.named("zipMod"))
+    from(tasks.named("zipMod").flatMap{ it.archiveFile })
+    into(new File(project.projectDir, "dist"))
+    rename{ _ -> "${project.name}.zip" }
+    doNotTrackState("Copying into dist is a convenience step; state tracking is unnecessary here.")
+}
+
+tasks.named("zipMod").configure{
+    finalizedBy tasks.named("copyZipToDist")
 }
