@@ -20,3 +20,4 @@ jobs:
         with:
           files: |
             dist/powergrid-minimap.zip
+            dist/powergrid-minimap.jar

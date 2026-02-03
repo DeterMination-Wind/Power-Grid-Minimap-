@@ -3,7 +3,7 @@ plugins{
 }
 
 group = "powergridminimap"
-version = "1.6.5"
+version = "1.7.0"
 
 repositories{
     mavenCentral()
@@ -35,6 +35,16 @@ tasks.register("zipMod", Zip){
     from("README.md")
 }
 
+tasks.register("jarMod", Jar){
+    group = "build"
+    description = "Packages the mod as a .jar for Mindustry (Android-friendly)."
+    dependsOn classes
+    archiveFileName = "${project.name}.jar"
+    destinationDirectory = layout.buildDirectory.dir("libs")
+    from(sourceSets.main.output)
+    from("README.md")
+}
+
 tasks.register("copyZipToDist", Copy){
     dependsOn(tasks.named("zipMod"))
     from(tasks.named("zipMod").flatMap{ it.archiveFile })
@@ -43,6 +53,18 @@ tasks.register("copyZipToDist", Copy){
     doNotTrackState("Copying into dist is a convenience step; state tracking is unnecessary here.")
 }
 
+tasks.register("copyJarToDist", Copy){
+    dependsOn(tasks.named("jarMod"))
+    from(tasks.named("jarMod").flatMap{ it.archiveFile })
+    into(new File(project.projectDir, "dist"))
+    rename{ _ -> "${project.name}.jar" }
+    doNotTrackState("Copying into dist is a convenience step; state tracking is unnecessary here.")
+}
+
 tasks.named("zipMod").configure{
     finalizedBy tasks.named("copyZipToDist")
+}
+
+tasks.named("jarMod").configure{
+    finalizedBy tasks.named("copyJarToDist")
 }
