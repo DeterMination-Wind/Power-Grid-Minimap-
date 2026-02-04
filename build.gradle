@@ -3,7 +3,7 @@ plugins{
 }
 
 group = "powergridminimap"
-version = "1.8.0"
+version = "1.9.0"
 
 repositories{
     mavenCentral()
@@ -61,10 +61,36 @@ tasks.register("copyJarToDist", Copy){
     doNotTrackState("Copying into dist is a convenience step; state tracking is unnecessary here.")
 }
 
+def buildCopyDir = new File(project.projectDir, "构建")
+
+tasks.register("copyZipToBuildFolder", Copy){
+    dependsOn(tasks.named("zipMod"))
+    from(tasks.named("zipMod").flatMap{ it.archiveFile })
+    into(buildCopyDir)
+    rename{ _ -> "${project.name}-${project.version}.zip" }
+    doFirst{
+        buildCopyDir.mkdirs()
+    }
+    doNotTrackState("Copying into 构建 is a convenience step; state tracking is unnecessary here.")
+}
+
+tasks.register("copyJarToBuildFolder", Copy){
+    dependsOn(tasks.named("jarMod"))
+    from(tasks.named("jarMod").flatMap{ it.archiveFile })
+    into(buildCopyDir)
+    rename{ _ -> "${project.name}-${project.version}.jar" }
+    doFirst{
+        buildCopyDir.mkdirs()
+    }
+    doNotTrackState("Copying into 构建 is a convenience step; state tracking is unnecessary here.")
+}
+
 tasks.named("zipMod").configure{
     finalizedBy tasks.named("copyZipToDist")
+    finalizedBy tasks.named("copyZipToBuildFolder")
 }
 
 tasks.named("jarMod").configure{
     finalizedBy tasks.named("copyJarToDist")
+    finalizedBy tasks.named("copyJarToBuildFolder")
 }

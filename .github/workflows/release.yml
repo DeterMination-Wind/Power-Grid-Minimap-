@@ -18,6 +18,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          body_path: RELEASE_NOTES.md
           files: |
             dist/powergrid-minimap.zip
             dist/powergrid-minimap.jar
