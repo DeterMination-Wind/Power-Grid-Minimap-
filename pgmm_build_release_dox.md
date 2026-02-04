@@ -41,7 +41,7 @@
 
 触发条件：
 
-- push tag：`v*`（例如 `v1.7.1`）
+- push tag：`v*`（例如 `v1.8.0`）
 
 行为：
 
@@ -70,4 +70,3 @@ git push origin vX.Y.Z
 ```
 
 随后 Actions 会自动生成 Release 并附带产物。
-
