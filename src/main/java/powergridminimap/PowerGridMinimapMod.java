@@ -17,6 +17,7 @@ import arc.scene.Element;
 import arc.scene.event.ClickListener;
 import arc.scene.event.InputEvent;
 import arc.scene.style.TextureRegionDrawable;
+import arc.scene.ui.Label;
 import arc.scene.ui.TextButton;
 import arc.scene.ui.layout.Table;
 import arc.struct.ObjectSet;
@@ -68,6 +69,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.Arrays;
 
+import static mindustry.Vars.control;
 import static mindustry.Vars.player;
 import static mindustry.Vars.renderer;
 import static mindustry.Vars.state;
@@ -161,6 +163,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             Core.settings.defaults(keyPowerTableThreshold, 10000);
             Core.settings.defaults(keyPowerTableBgAlpha, 70);
             Core.settings.defaults(keyUpdateWaitTenths, 10);
+            GithubUpdateCheck.applyDefaults();
 
             registerSettings();
             refreshMarkerColor();
@@ -435,6 +438,10 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
 
             table.pref(new PgmmSettingsWidgets.HeaderSetting(Core.bundle.get("pgmm.section.performance", "Performance"), Icon.wrenchSmall));
             table.pref(new PgmmSettingsWidgets.IconSliderSetting(keyUpdateWaitTenths, 10, 0, 50, 1, Icon.refreshSmall, v -> Strings.autoFixed(v / 10f, 1) + "s", null));
+
+            table.pref(new PgmmSettingsWidgets.HeaderSetting(Core.bundle.get("pgmm.section.update", "Update"), Icon.refreshSmall));
+            table.pref(new PgmmSettingsWidgets.IconCheckSetting(GithubUpdateCheck.enabledKey(), true, Icon.refreshSmall, null));
+            table.pref(new PgmmSettingsWidgets.IconCheckSetting(GithubUpdateCheck.showDialogKey(), true, Icon.infoSmall, null));
         });
     }
 
@@ -533,7 +540,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
 
         Core.app.post(() -> {
             if(!state.isGame() || world == null || world.isGenerating() || player == null) return;
-            if(Core.camera == null) return;
+            if(control == null || control.input == null) return;
 
             if(!computeGridCenter(info, tmpGridCenter)) return;
 
@@ -544,8 +551,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             float x = Mathf.clamp(tmpGridCenter.x, minx, maxx);
             float y = Mathf.clamp(tmpGridCenter.y, miny, maxy);
 
-            Core.camera.position.set(x, y);
-            Core.camera.update();
+            control.input.panCamera(Tmp.v1.set(x, y));
         });
     }
 
@@ -2469,7 +2475,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
 
         void setHostedByOverlayUI(boolean hosted){
             hostedByOverlayUI = hosted;
-            touchable = hostedByOverlayUI ? Touchable.enabled : Touchable.disabled;
+            touchable = hostedByOverlayUI ? Touchable.childrenOnly : Touchable.disabled;
         }
 
         @Override
@@ -2597,30 +2603,46 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
 
                 table(row -> {
                     row.left();
-                    row.image(whiteDrawable).size(6f).color(gridColor);
+                    row.defaults().padRight(6f);
 
-                    TextButton idButton = new TextButton("#" + gid, Styles.cleart);
-                    idButton.getLabel().setColor(cId);
-                    idButton.addListener(new ClickListener(){
-                        @Override
-                        public void clicked(InputEvent event, float x, float y){
+                    row.table(left -> {
+                        left.setClip(true);
+                        left.left();
+                        left.defaults().left().padRight(6f);
+
+                        left.image(whiteDrawable).size(6f).color(gridColor);
+
+                        TextButton idButton = left.button("#" + gid, Styles.cleart, () -> {
                             //Only make this interactive when hosted by OverlayUI, so the HUD-anchored fallback stays click-through.
                             if(hostedByOverlayUI){
                                 focusGridCenter(info);
                             }
-                        }
-                    });
-                    row.add(idButton).padLeft(4f);
+                        }).padLeft(4f).padRight(8f).get();
+                        idButton.getLabel().setColor(cId);
+                        idButton.getLabel().setWrap(false);
+                        idButton.getLabel().setEllipsis(true);
 
-                    row.add("in").color(cKey).padLeft(8f);
-                    row.add(UI.formatAmount((long)powerIn)).color(cKey);
+                        left.add("in").color(cKey);
+                        left.add(UI.formatAmount((long)powerIn)).color(cKey);
+                    }).growX().fillX().left();
 
-                    row.add("now").color(cKey).padLeft(8f);
-                    row.add((now >= 0f ? "+" : "") + UI.formatAmount((long)now)).color(now >= 0f ? cPos : cNeg);
+                    row.table(right -> {
+                        right.right();
+                        right.defaults().right().padLeft(6f);
 
-                    row.add("min").color(cKey).padLeft(8f);
-                    row.add((min >= 0f ? "+" : "") + UI.formatAmount((long)min)).color(min >= 0f ? cPos : cNeg);
-                }).padTop(2f).row();
+                        right.add("now").color(cKey);
+                        Label nowLabel = right.add((now >= 0f ? "+" : "") + UI.formatAmount((long)now)).color(now >= 0f ? cPos : cNeg).right().get();
+                        nowLabel.setAlignment(Align.right);
+                        nowLabel.setWrap(false);
+                        nowLabel.setEllipsis(true);
+
+                        right.add("min").color(cKey);
+                        Label minLabel = right.add((min >= 0f ? "+" : "") + UI.formatAmount((long)min)).color(min >= 0f ? cPos : cNeg).right().get();
+                        minLabel.setAlignment(Align.right);
+                        minLabel.setWrap(false);
+                        minLabel.setEllipsis(true);
+                    }).right();
+                }).growX().fillX().padTop(2f).row();
 
                 shown++;
                 if(shown >= 12) break;
