@@ -20,6 +20,18 @@ Color each disconnected power network on the minimap/full map and show its power
 
 输出 zip 在 `mods/powergrid-minimap/build/libs/`。
 
+## 安卓 / Android
+
+安卓端需要包含 `classes.dex` 的 mod 包。请下载 Release 中的 `powergrid-minimap-android.jar` 并放入 Mindustry 的 `mods` 目录。
+
+本地构建（在本仓库根目录）：
+
+```powershell
+./gradlew.bat jarAndroid
+```
+
+输出：`dist/powergrid-minimap-android.jar`
+
 ## Build
 
 Run this in the Mindustry-master repo root:
@@ -29,3 +41,15 @@ Run this in the Mindustry-master repo root:
 ```
 
 The zip will be in `Power-Grid-Minimap-repo-clone/build/libs/`.
+
+## Android
+
+Android requires a mod package that contains `classes.dex`. Download `powergrid-minimap-android.jar` from Releases and put it into Mindustry's `mods` folder.
+
+Local build (from this repo root):
+
+```powershell
+./gradlew.bat jarAndroid
+```
+
+Output: `dist/powergrid-minimap-android.jar`
