@@ -90,6 +90,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
     private static final String keyShowBalance = "pgmm-showbalance";
     private static final String keyDrawOnMi2Minimap = "pgmm-mi2minimap";
     private static final String keyClaimDistance = "pgmm-claimdistance";
+    private static final String keySplitAlertEnabled = "pgmm-splitalert";
     private static final String keySplitAlertThreshold = "pgmm-splitalertthreshold";
     private static final String keySplitAlertWindowSeconds = "pgmm-splitwindow";
     private static final String keyClusterMarkerDistance = "pgmm-clustermarkerdistance";
@@ -147,6 +148,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             Core.settings.defaults(keyShowBalance, true);
             Core.settings.defaults(keyDrawOnMi2Minimap, false);
             Core.settings.defaults(keyClaimDistance, 5);
+            Core.settings.defaults(keySplitAlertEnabled, true);
             Core.settings.defaults(keySplitAlertThreshold, 10000);
             Core.settings.defaults(keySplitAlertWindowSeconds, 4);
             Core.settings.defaults(keyClusterMarkerDistance, 15);
@@ -416,6 +418,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
 
             table.pref(new PgmmSettingsWidgets.HeaderSetting(Core.bundle.get("pgmm.section.alerts", "Alerts & Markers"), Icon.warningSmall));
             table.pref(new PgmmSettingsWidgets.IconSliderSetting(keyClaimDistance, 5, 1, 20, 1, Icon.gridSmall, String::valueOf, null));
+            table.pref(new PgmmSettingsWidgets.IconCheckSetting(keySplitAlertEnabled, true, Icon.warningSmall, null));
             table.pref(new PgmmSettingsWidgets.IconSliderSetting(keySplitAlertThreshold, 10000, 1000, 50000, 500, Icon.warningSmall, v -> v + "/s", null));
             table.pref(new PgmmSettingsWidgets.IconSliderSetting(keySplitAlertWindowSeconds, 4, 1, 15, 1, Icon.refreshSmall, v -> v + "s", null));
             table.pref(new PgmmSettingsWidgets.IconSliderSetting(keyClusterMarkerDistance, 15, 0, 60, 1, Icon.filterSmall, String::valueOf, null));
@@ -2806,6 +2809,13 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
         }
 
         void update(){
+            if(!Core.settings.getBool(keySplitAlertEnabled, true)){
+                if(!pendingSplits.isEmpty()){
+                    reset();
+                }
+                alert.clear();
+                return;
+            }
             if(Time.time < nextScan) return;
             nextScan = Time.time + scanInterval;
 
@@ -2814,6 +2824,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
                 lastGraphPowerIn.clear();
                 lastSplitTime.clear();
                 pendingSplits.clear();
+                alert.clear();
                 return;
             }
 
@@ -3165,6 +3176,11 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
         }
 
         void update(){
+            if(!Core.settings.getBool(keyRescueEnabled, false)){
+                rescueAlert.clear();
+                reset();
+                return;
+            }
             if(Time.time < nextScan) return;
             if(!state.isGame() || world == null || world.isGenerating() || player == null){
                 rescueAlert.clear();
