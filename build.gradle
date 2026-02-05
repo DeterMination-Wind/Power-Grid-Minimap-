@@ -61,7 +61,8 @@ tasks.register("copyJarToDist", Copy){
     doNotTrackState("Copying into dist is a convenience step; state tracking is unnecessary here.")
 }
 
-def buildCopyDir = new File(project.projectDir, "构建")
+// Keep a copy in workspace root "构建/" (mod name + version).
+def buildCopyDir = new File(rootDir.parentFile, "构建")
 
 tasks.register("copyZipToBuildFolder", Copy){
     dependsOn(tasks.named("zipMod"))
@@ -71,7 +72,7 @@ tasks.register("copyZipToBuildFolder", Copy){
     doFirst{
         buildCopyDir.mkdirs()
     }
-    doNotTrackState("Copying into 构建 is a convenience step; state tracking is unnecessary here.")
+    doNotTrackState("Copying into workspace 构建 is a convenience step; state tracking is unnecessary here.")
 }
 
 tasks.register("copyJarToBuildFolder", Copy){
@@ -82,7 +83,7 @@ tasks.register("copyJarToBuildFolder", Copy){
     doFirst{
         buildCopyDir.mkdirs()
     }
-    doNotTrackState("Copying into 构建 is a convenience step; state tracking is unnecessary here.")
+    doNotTrackState("Copying into workspace 构建 is a convenience step; state tracking is unnecessary here.")
 }
 
 tasks.named("zipMod").configure{
