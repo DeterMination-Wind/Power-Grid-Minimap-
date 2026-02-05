@@ -44,6 +44,7 @@ PGMM 使用 Mindustry 原生 `Core.settings` 存取配置：
 - `pgmm.section.basic`（基础）
 - `pgmm.section.integration`（集成）
 - `pgmm.section.alerts`（告警与标记）
+- `pgmm.section.advanced`（高级）
 - `setting.pgmm.rescue.section`（缺电救援）
 - `setting.pgmm.powertable.section`（电力表）
 - `pgmm.section.performance`（性能）
@@ -62,4 +63,3 @@ PGMM 使用 Mindustry 原生 `Core.settings` 存取配置：
   - MindustryX OverlayUI 读取的窗口标题（OverlayUI 侧用 `settingV2.overlayUI.<windowName>.name`）。
 
 建议：新增设置项时，至少补 `bundle.properties`（英文）与 `bundle_zh_CN.properties`（中文）。
-
