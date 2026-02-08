@@ -1,3 +1,9 @@
+## v1.13.1 更新日志（PGMM / Power Grid Minimap）
+
+### 🔧 构建依赖修复
+- 构建脚本增加 Mindustry 依赖镜像仓库（Zelaux/MindustryRepo）。
+- `compileOnly` 依赖切换到 `com.github.Anuken.Mindustry:core`，避免 `MindustryJitpack` 在当前环境下缺失 Arc 子模块导致的构建失败。
+
 ## v1.13.0 更新日志（PGMM / Power Grid Minimap）
 
 ### 💬 多人断电影响提醒
