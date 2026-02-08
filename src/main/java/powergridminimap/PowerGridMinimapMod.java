@@ -56,6 +56,7 @@ import mindustry.game.Team;
 import mindustry.graphics.Drawf;
 import mindustry.graphics.Pal;
 import mindustry.gen.Building;
+import mindustry.gen.Call;
 import mindustry.gen.Icon;
 import mindustry.gen.Player;
 import mindustry.mod.Scripts;
@@ -94,6 +95,8 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
     private static final String keySplitAlertEnabled = "pgmm-splitalert";
     private static final String keySplitAlertThreshold = "pgmm-splitalertthreshold";
     private static final String keySplitAlertWindowSeconds = "pgmm-splitwindow";
+    private static final String keySplitAlertMultiplayerEnabled = "pgmm-splitalert-multiplayer";
+    private static final String keySplitAlertMultiplayerIntervalSeconds = "pgmm-splitalert-multiplayer-interval";
     private static final String keyClusterMarkerDistance = "pgmm-clustermarkerdistance";
     private static final String keyReconnectStroke = "pgmm-markerstroke";
     private static final String keyReconnectColor = "pgmm-markerlinecolor";
@@ -137,6 +140,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
     private final MindustryXOverlayUI xOverlayUi = new MindustryXOverlayUI();
     private Object xPowerTableWindow = null;
     private boolean lastPowerTableEnabled = false;
+    private float nextSplitAlertMultiplayerChatAt = 0f;
     private final Mi2MinimapIntegration mi2 = new Mi2MinimapIntegration();
     private final PgmmConsoleApi consoleApi = new PgmmConsoleApi(this);
     private boolean consoleApiLogged = false;
@@ -154,6 +158,8 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             Core.settings.defaults(keySplitAlertEnabled, true);
             Core.settings.defaults(keySplitAlertThreshold, 10000);
             Core.settings.defaults(keySplitAlertWindowSeconds, 4);
+            Core.settings.defaults(keySplitAlertMultiplayerEnabled, false);
+            Core.settings.defaults(keySplitAlertMultiplayerIntervalSeconds, 8);
             Core.settings.defaults(keyClusterMarkerDistance, 15);
             Core.settings.defaults(keyReconnectStroke, 2);
             Core.settings.defaults(keyReconnectColor, "ffa500");
@@ -188,6 +194,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             cache.clear();
             rescueAlert.clear();
             rescueAdvisor.reset();
+            nextSplitAlertMultiplayerChatAt = 0f;
             Time.runTask(10f, this::ensureOverlayAttached);
             Time.runTask(10f, this::ensurePowerTableAttached);
         });
@@ -363,6 +370,8 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
         }catch(Throwable ignored){
         }
 
+        nextSplitAlertMultiplayerChatAt = 0f;
+
         try{
             rescueAdvisor.reset();
         }catch(Throwable ignored){
@@ -425,6 +434,8 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             table.pref(new PgmmSettingsWidgets.IconCheckSetting(keySplitAlertEnabled, true, Icon.warningSmall, null));
             table.pref(new PgmmSettingsWidgets.IconSliderSetting(keySplitAlertThreshold, 10000, 1000, 50000, 500, Icon.warningSmall, v -> v + "/s", null));
             table.pref(new PgmmSettingsWidgets.IconSliderSetting(keySplitAlertWindowSeconds, 4, 1, 15, 1, Icon.refreshSmall, v -> v + "s", null));
+            table.pref(new PgmmSettingsWidgets.IconCheckSetting(keySplitAlertMultiplayerEnabled, false, Icon.chatSmall, null));
+            table.pref(new PgmmSettingsWidgets.IconSliderSetting(keySplitAlertMultiplayerIntervalSeconds, 8, 1, 60, 1, Icon.refreshSmall, v -> v + "s", null));
             table.pref(new PgmmSettingsWidgets.IconSliderSetting(keyClusterMarkerDistance, 15, 0, 60, 1, Icon.filterSmall, String::valueOf, null));
             table.pref(new PgmmSettingsWidgets.IconSliderSetting(keyReconnectStroke, 2, 1, 8, 1, Icon.pencilSmall, String::valueOf, null));
             table.pref(new PgmmSettingsWidgets.IconTextSetting(keyReconnectColor, "ffa500", Icon.effectSmall, v -> refreshReconnectColor()));
@@ -477,6 +488,18 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
         if(!tryParseHexColor(value, out)){
             out.set(Color.scarlet);
         }
+    }
+
+    private void trySendSplitAlertMultiplayerChat(int tileX, int tileY){
+        if(!Core.settings.getBool(keySplitAlertMultiplayerEnabled, false)) return;
+        if(mindustry.Vars.net == null || !mindustry.Vars.net.active()) return;
+        if(player == null || state == null || !state.isGame()) return;
+        if(Time.time < nextSplitAlertMultiplayerChatAt) return;
+
+        int intervalSeconds = Mathf.clamp(Core.settings.getInt(keySplitAlertMultiplayerIntervalSeconds, 8), 1, 60);
+        nextSplitAlertMultiplayerChatAt = Time.time + intervalSeconds * 60f;
+
+        Call.sendChatMessage("<PGMM><[red]断电建议连接点[]>(" + tileX + "," + tileY + ")");
     }
 
     private void ensureOverlayAttached(){
@@ -2228,6 +2251,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             //MindustryX integration: add a map mark with tile coordinates (no-op on vanilla).
             int tileX = Mathf.clamp((int)(midWorldX / tilesize), 0, world.width() - 1);
             int tileY = Mathf.clamp((int)(midWorldY / tilesize), 0, world.height() - 1);
+            trySendSplitAlertMultiplayerChat(tileX, tileY);
             xMarkers.markReconnect(tileX, tileY);
         }
 
