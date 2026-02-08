@@ -2736,10 +2736,13 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
                 whiteDrawable = new TextureRegionDrawable(Core.atlas.white());
             }
 
+            Team playerTeam = player == null ? null : player.team();
+
             int shown = 0;
             for(int i = 0; i < cache.grids.size; i++){
                 GridInfo info = cache.grids.get(i);
                 PowerGraph graph = info == null ? null : info.graph;
+                if(info == null || playerTeam == null || info.team != playerTeam) continue;
                 if(graph == null) continue;
                 if(!graph.hasPowerBalanceSamples()) continue;
 

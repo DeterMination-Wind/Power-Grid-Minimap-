@@ -1,3 +1,8 @@
+## v1.13.2 更新日志（PGMM / Power Grid Minimap）
+
+### 🛠️ Bug 修复
+- 修复：在 MindustryX OverlayUI 中显示的电力表不再包含敌方电网，仅展示玩家当前队伍电网。
+
 ## v1.13.1 更新日志（PGMM / Power Grid Minimap）
 
 ### 🔧 构建依赖修复
