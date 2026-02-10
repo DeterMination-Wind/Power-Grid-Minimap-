@@ -1,3 +1,8 @@
+## v1.14.1 更新日志（PGMM / Power Grid Minimap）
+
+### 🛠️ Bug 修复
+- 修复：关闭“救援建议”后，电力表中的 `min`（电网波动最小值）仍会持续更新并正确显示。
+
 ## v1.14.0 更新日志（PGMM / Power Grid Minimap）
 
 ### ⚠️ 断网提醒判定增强
