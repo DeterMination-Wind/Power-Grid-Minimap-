@@ -33,7 +33,7 @@ jobs:
       - name: Build
         run: |
           chmod +x ./gradlew
-          ./gradlew --no-daemon clean zipMod jarMod jarAndroid copyAndroidJarToDist
+          ./gradlew --no-daemon clean zipMod jarMod jarAndroid
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

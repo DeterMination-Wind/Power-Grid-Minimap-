@@ -5,6 +5,11 @@ plugins{
 group = "powergridminimap"
 version = "1.14.0"
 
+java{
+    sourceCompatibility = JavaVersion.VERSION_1_8
+    targetCompatibility = JavaVersion.VERSION_1_8
+}
+
 def mindustryVersion = (findProperty("mindustryVersion") ?: "v154.3").toString()
 def arcVersion = (findProperty("arcVersion") ?: mindustryVersion).toString()
 
@@ -35,6 +40,9 @@ dependencies{
 
 tasks.withType(JavaCompile).configureEach{
     options.encoding = "UTF-8"
+    if(JavaVersion.current().isCompatibleWith(JavaVersion.VERSION_1_9)){
+        options.release.set(8)
+    }
 }
 
 tasks.register("zipMod", Zip){
@@ -202,4 +210,20 @@ tasks.register("copyAndroidJarToDist", Copy){
     into(new File(project.projectDir, "dist"))
     rename{ _ -> "${project.name}-android.jar" }
     doNotTrackState("Copying into dist is a convenience step; state tracking is unnecessary here.")
+}
+
+tasks.register("copyAndroidJarToBuildFolder", Copy){
+    dependsOn(tasks.named("jarAndroid"))
+    from(tasks.named("jarAndroid").flatMap{ it.archiveFile })
+    into(buildCopyDir)
+    rename{ _ -> "${project.name}-${project.version}-android.jar" }
+    doFirst{
+        buildCopyDir.mkdirs()
+    }
+    doNotTrackState("Copying into workspace 构建 is a convenience step; state tracking is unnecessary here.")
+}
+
+tasks.named("jarAndroid").configure{
+    finalizedBy tasks.named("copyAndroidJarToDist")
+    finalizedBy tasks.named("copyAndroidJarToBuildFolder")
 }

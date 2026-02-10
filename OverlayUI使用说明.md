@@ -142,7 +142,100 @@ PGMM 的 OverlayUI 对接代码在：
 
 ---
 
-## 8. 常见坑
+## 8. StealthPath 的两项实战实现（已在源码验证）
+
+StealthPath 在 `StealthPath/src/main/java/stealthpath/StealthPathMod.java` 里，把 OverlayUI 的“原生可调大小”与“按钮自动重排”做成了可直接迁移的方案。下面按源码结构整理。
+
+### 8.1 让 OverlayUI 真正支持自由调节大小
+
+目标：用户拖拽窗口边缘后，不被内容布局的 min/pref 尺寸“弹回”。
+
+StealthPath 采用“两层保险”：
+
+1) **Window 层**：注册成功后立刻设置 `autoHeight=false` 与 `resizable=true`。
+
+```java
+// ensureOverlayWindowsAttached() 中，对每个窗口都做同样配置
+xOverlayUi.tryConfigureWindow(xModeWindow, false, true);
+xOverlayUi.tryConfigureWindow(xDamageWindow, false, true);
+xOverlayUi.tryConfigureWindow(xControlsWindow, false, true);
+```
+
+对应反射封装（无 MindustryX 编译期依赖）：
+
+```java
+void tryConfigureWindow(Object window, boolean autoHeight, boolean resizable){
+    if(window == null) return;
+    try{
+        tryInitWindowAccessors(window);
+        if(setAutoHeight != null) setAutoHeight.invoke(window, autoHeight);
+        if(setResizable != null) setResizable.invoke(window, resizable);
+    }catch(Throwable ignored){
+    }
+}
+```
+
+2) **内容层**：在每个窗口内容 `Table` 末尾添加 `PreferAnySize`，放宽内容对窗口尺寸的约束。
+
+```java
+overlayModeContent.add(new PreferAnySize()).grow().row();
+overlayDamageContent.add(new PreferAnySize()).grow().row();
+overlayControlsContent.add(new PreferAnySize()).grow().row();
+
+private static class PreferAnySize extends Element{
+    @Override public float getMinWidth(){ return 0f; }
+    @Override public float getPrefWidth(){ return getWidth(); }
+    @Override public float getMinHeight(){ return 0f; }
+    @Override public float getPrefHeight(){ return getHeight(); }
+}
+```
+
+结论：仅 `resizable=true` 还不够，必须叠加 `PreferAnySize` 这类“可伸缩内容偏好”，才能避免 OverlayUI 在 resize 结束时回弹。
+
+### 8.2 根据窗口尺寸自动重排按钮（1/2/3 列）
+
+目标：一个控制面板同时适配窄窗和宽窗，不维护多份 UI。
+
+StealthPath 的实现步骤：
+
+1) 按钮对象只创建一次（`bx/by/bn/bm/bt`），重排时复用，不重复 new。  
+2) 用 `buttonsHost` 作为按钮承载容器，所有布局切换都在这个容器里完成。  
+3) 在 `overlayControlsContent.update(...)` 监听当前宽高，使用 `lastW/lastH` 做 2px 阈值去抖。  
+4) 根据宽度算列数：`w >= 520` 用 3 列，`w >= 340` 用 2 列，否则 1 列。  
+5) 每次重排先 `buttonsHost.clearChildren()`，再按列模板重新 `add(...).row()`。
+
+简化版（与源码同逻辑）：
+
+```java
+final float[] lastW = {Float.NaN};
+final float[] lastH = {Float.NaN};
+
+overlayControlsContent.update(() -> {
+    float w = Math.max(0f, overlayControlsContent.getWidth());
+    float h = Math.max(0f, overlayControlsContent.getHeight());
+    if(Math.abs(w - lastW[0]) <= 2f && Math.abs(h - lastH[0]) <= 2f) return;
+    lastW[0] = w;
+    lastH[0] = h;
+
+    int cols = w >= 520f ? 3 : (w >= 340f ? 2 : 1);
+    buttonsHost.clearChildren();
+    buttonsHost.left().defaults().minWidth(0f).height(38f);
+
+    if(cols <= 1){
+        // 1 列：X / Y / N / M / Threat 逐行堆叠
+    }else if(cols == 2){
+        // 2 列：两两排列，末项可 colspan(2)
+    }else{
+        // 3 列：首行 3 项，次行放剩余项
+    }
+});
+```
+
+这个模式在 OverlayUI 下的优势是：用户拖拽改变窗口尺寸时，布局即时响应、抖动少、且不会频繁触发对象分配。
+
+---
+
+## 9. 常见坑
 
 1) **用太早注册**
    - UI 还没初始化时注册会失败；建议放到 `ClientLoadEvent` 后，并用 `Time.runTask(...)` 延迟一次重试。
@@ -150,4 +243,3 @@ PGMM 的 OverlayUI 对接代码在：
    - 在 OverlayUI 模式下会和 Window 的拖拽/吸附冲突；务必关掉你自己的定位逻辑。
 3) **把 MindustryX 当 compile 依赖**
    - 玩家没装 MindustryX 会 ClassNotFound 崩；除非你明确要求依赖，否则用反射更稳。
-
