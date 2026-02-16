@@ -3,7 +3,7 @@
   "displayName": "电网小地图 / Power Grid Minimap",
   "author": "DeterMination",
   "description": "Color each independent power grid on minimap/full map, show live power balance, detect split outages, and suggest reconnect links. / 在小地图与全图按电网分色显示，实时展示电力盈亏，检测断网并给出快速重连建议。",
-  "version": "1.15.0",
+  "version": "1.15.1",
   "minGameVersion": 154,
   "hidden": true,
   "java": true,
