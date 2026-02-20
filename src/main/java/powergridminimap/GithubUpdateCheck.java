@@ -161,7 +161,7 @@ final class GithubUpdateCheck{
     }
 
     private static void checkFromRawModJson(Mods.LoadedMod mod, String current, String ignored){
-        String url = "https://raw.githubusercontent.com/" + owner + "/" + repo + "/main/src/main/resources/mod.json";
+        String url = "https://raw.githubusercontent.com/" + owner + "/" + repo + "/main/mod.json";
         Http.get(url)
         .timeout(30000)
         .error(e -> {

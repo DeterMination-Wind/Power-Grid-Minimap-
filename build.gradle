@@ -3,7 +3,7 @@ plugins{
 }
 
 group = "powergridminimap"
-version = "1.15.1"
+version = "1.15.2"
 
 java{
     sourceCompatibility = JavaVersion.VERSION_1_8
@@ -226,4 +226,90 @@ tasks.register("copyAndroidJarToBuildFolder", Copy){
 tasks.named("jarAndroid").configure{
     finalizedBy tasks.named("copyAndroidJarToDist")
     finalizedBy tasks.named("copyAndroidJarToBuildFolder")
+}
+
+def mergedArchiveBase = project.name
+
+tasks.register("jarMerged", Jar){
+    group = "build"
+    description = "Packages a single jar for both desktop and Android."
+    dependsOn tasks.named("classes")
+    dependsOn tasks.named("dexAndroid")
+    archiveFileName = "${mergedArchiveBase}.jar"
+    destinationDirectory = layout.buildDirectory.dir("libs")
+    from(sourceSets.main.output)
+    from(androidDexOutDir){
+        include "classes.dex"
+    }
+    from(projectDir){
+        include "mod.json"
+        include "mod.hjson"
+    }
+    from("README.md")
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+tasks.register("zipMerged", Zip){
+    group = "build"
+    description = "Packages a single zip for both desktop and Android."
+    dependsOn tasks.named("jarMerged")
+    archiveFileName = "${mergedArchiveBase}.zip"
+    destinationDirectory = layout.buildDirectory.dir("libs")
+    from({ zipTree(tasks.named("jarMerged").get().archiveFile.get().asFile) })
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+tasks.register("copyMergedJarToDist", Copy){
+    dependsOn tasks.named("jarMerged")
+    from(tasks.named("jarMerged").flatMap{ it.archiveFile })
+    into(new File(project.projectDir, "dist"))
+    rename{ _ -> "${mergedArchiveBase}.jar" }
+    doNotTrackState("Copying into dist is a convenience step; state tracking is unnecessary here.")
+}
+
+tasks.register("copyMergedZipToDist", Copy){
+    dependsOn tasks.named("zipMerged")
+    from(tasks.named("zipMerged").flatMap{ it.archiveFile })
+    into(new File(project.projectDir, "dist"))
+    rename{ _ -> "${mergedArchiveBase}.zip" }
+    doNotTrackState("Copying into dist is a convenience step; state tracking is unnecessary here.")
+}
+
+tasks.register("copyMergedJarToBuildFolder", Copy){
+    dependsOn tasks.named("jarMerged")
+    from(tasks.named("jarMerged").flatMap{ it.archiveFile })
+    into(buildCopyDir)
+    rename{ _ -> "${mergedArchiveBase}-${project.version}.jar" }
+    doFirst{
+        buildCopyDir.mkdirs()
+    }
+    doNotTrackState("Copying into workspace 构建 is a convenience step; state tracking is unnecessary here.")
+}
+
+tasks.register("copyMergedZipToBuildFolder", Copy){
+    dependsOn tasks.named("zipMerged")
+    from(tasks.named("zipMerged").flatMap{ it.archiveFile })
+    into(buildCopyDir)
+    rename{ _ -> "${mergedArchiveBase}-${project.version}.zip" }
+    doFirst{
+        buildCopyDir.mkdirs()
+    }
+    doNotTrackState("Copying into workspace 构建 is a convenience step; state tracking is unnecessary here.")
+}
+
+tasks.named("jarMerged").configure{
+    finalizedBy tasks.named("copyMergedJarToDist")
+    finalizedBy tasks.named("copyMergedJarToBuildFolder")
+}
+
+tasks.named("zipMerged").configure{
+    finalizedBy tasks.named("copyMergedZipToDist")
+    finalizedBy tasks.named("copyMergedZipToBuildFolder")
+}
+
+tasks.register("deploy"){
+    group = "build"
+    description = "Builds merged desktop+android jar and zip artifacts."
+    dependsOn tasks.named("jarMerged")
+    dependsOn tasks.named("zipMerged")
 }

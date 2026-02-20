@@ -1,27 +1,20 @@
-name: Auto Release
+name: Release
 
 on:
-  push:
-    branches:
-      - "main"
   workflow_dispatch:
+  push:
+    tags:
+      - "v*"
 
 permissions:
   contents: write
 
-concurrency:
-  group: auto-release-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
   release:
-    if: ${{ github.event_name != 'push' || !contains(github.event.head_commit.message, '[skip release]') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -32,266 +25,29 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Determine release plan
-        id: plan
-        shell: bash
-        run: |
-          python - <<'PY'
-          import json
-          import os
-          import re
-          import subprocess
-          from pathlib import Path
-
-          def run(args):
-              return subprocess.check_output(args, text=True, encoding="utf-8", errors="replace").strip()
-
-          def try_run(args):
-              try:
-                  return run(args)
-              except Exception:
-                  return ""
-
-          def parse_semver(text):
-              m = re.match(r"^v?(\d+)\.(\d+)\.(\d+)$", text.strip())
-              if not m:
-                  return None
-              return int(m.group(1)), int(m.group(2)), int(m.group(3))
-
-          latest_tag = try_run(["git", "describe", "--tags", "--abbrev=0", "--match", "v*"])
-          commit_range = f"{latest_tag}..HEAD" if latest_tag else "HEAD"
-          raw = try_run(["git", "log", "--format=%s%n%b%x1e", commit_range])
-
-          entries = [e.strip() for e in raw.split("\x1e") if e.strip()]
-          commits = []
-          for entry in entries:
-              lines = [ln for ln in entry.splitlines() if ln.strip()]
-              if not lines:
-                  continue
-              subject = lines[0].strip()
-              body = "\n".join(lines[1:]).strip()
-              commits.append((subject, body))
-
-          level = 0
-          for subject, body in commits:
-              text = (subject + "\n" + body).lower()
-              if "breaking change" in text or re.match(r"^[a-z][a-z0-9_-]*(\([^)]+\))?!:", subject, flags=re.IGNORECASE) or re.match(r"^major(\([^)]+\))?:", subject, flags=re.IGNORECASE):
-                  level = max(level, 3)
-                  continue
-              if re.match(r"^feat(\([^)]+\))?:", subject, flags=re.IGNORECASE):
-                  level = max(level, 2)
-                  continue
-              if re.match(r"^(fix|perf|refactor|revert|docs|style|test|chore|ci|build)(\([^)]+\))?:", subject, flags=re.IGNORECASE):
-                  level = max(level, 1)
-
-          build_gradle = Path("build.gradle")
-          mod_json = Path("src/main/resources/mod.json")
-          current = None
-
-          if latest_tag:
-              current = parse_semver(latest_tag)
-
-          if current is None and build_gradle.exists():
-              m = re.search(r'^\s*version\s*=\s*"([^"]+)"', build_gradle.read_text(encoding="utf-8", errors="replace"), flags=re.MULTILINE)
-              if m:
-                  current = parse_semver(m.group(1))
-
-          if current is None and mod_json.exists():
-              try:
-                  current = parse_semver(str(json.loads(mod_json.read_text(encoding="utf-8", errors="replace")).get("version", "")))
-              except Exception:
-                  current = None
-
-          if current is None:
-              current = (0, 0, 0)
-
-          major, minor, patch = current
-          if level >= 3:
-              major, minor, patch = major + 1, 0, 0
-              bump = "major"
-          elif level == 2:
-              major, minor, patch = major, minor + 1, 0
-              bump = "minor"
-          elif level == 1:
-              major, minor, patch = major, minor, patch + 1
-              bump = "patch"
-          else:
-              bump = "none"
-
-          version = f"{major}.{minor}.{patch}"
-          tag = f"v{version}"
-
-          notes = [f"## {tag}", ""]
-          if bump != "none":
-              notes.append(f"- Version bump: `{bump}`")
-              if latest_tag:
-                  notes.append(f"- Commit range: `{latest_tag}..HEAD`")
-              else:
-                  notes.append("- Commit range: initial release range")
-              notes.append("")
-              notes.append("### Changes")
-              for subject, _ in commits:
-                  notes.append(f"- {subject}")
-          else:
-              notes.append("- No releasable commit keywords found.")
-
-          Path("release-notes.md").write_text("\n".join(notes) + "\n", encoding="utf-8")
-
-          out = Path(os.environ["GITHUB_OUTPUT"])
-          with out.open("a", encoding="utf-8") as f:
-              f.write(f"should_release={'true' if bump != 'none' else 'false'}\n")
-              f.write(f"bump={bump}\n")
-              f.write(f"version={version}\n")
-              f.write(f"tag={tag}\n")
-          PY
-
-      - name: Stop when nothing to release
-        if: steps.plan.outputs.should_release != 'true'
-        run: echo "No fix/feat/major style commits detected since last tag."
-
-      - name: Update version files
-        if: steps.plan.outputs.should_release == 'true'
-        shell: bash
-        env:
-          NEXT_VERSION: ${{ steps.plan.outputs.version }}
-        run: |
-          python - <<'PY'
-          import json
-          import os
-          import re
-          from pathlib import Path
-
-          version = os.environ["NEXT_VERSION"]
-
-          build_gradle = Path("build.gradle")
-          if build_gradle.exists():
-              text = build_gradle.read_text(encoding="utf-8", errors="replace")
-              pattern = re.compile(r'^(\s*version\s*=\s*")[^"]+("\s*)$', flags=re.MULTILINE)
-              text, count = pattern.subn(lambda m: f"{m.group(1)}{version}{m.group(2)}", text, count=1)
-              if count > 0:
-                  build_gradle.write_text(text, encoding="utf-8")
-
-          mod_json = Path("src/main/resources/mod.json")
-          if mod_json.exists():
-              data = json.loads(mod_json.read_text(encoding="utf-8", errors="replace"))
-              if data.get("version") != version:
-                  data["version"] = version
-                  mod_json.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-          PY
-
-      - name: Commit version changes
-        if: steps.plan.outputs.should_release == 'true'
-        shell: bash
-        env:
-          VERSION: ${{ steps.plan.outputs.version }}
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          if [ -f build.gradle ]; then git add build.gradle; fi
-          if [ -f src/main/resources/mod.json ]; then git add src/main/resources/mod.json; fi
-
-          if ! git diff --cached --quiet; then
-            git commit -m "release: v${VERSION} [skip release]"
-          else
-            echo "No version files changed; skipping release commit."
-          fi
-
       - name: Setup Android SDK
-        if: steps.plan.outputs.should_release == 'true'
         uses: android-actions/setup-android@v3
 
       - name: Install Android build-tools
-        if: steps.plan.outputs.should_release == 'true'
         run: sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
-      - name: Build and collect artifacts
-        if: steps.plan.outputs.should_release == 'true'
+      - name: Build merged artifacts
         shell: bash
-        env:
-          VERSION: ${{ steps.plan.outputs.version }}
         run: |
           set -euo pipefail
-          mkdir -p dist
-
-          if [ -d release-artifacts ]; then
-            shopt -s nullglob
-            for f in release-artifacts/*.jar; do
-              base="$(basename "$f" .jar)"
-              if [[ "$base" == *-android ]]; then
-                name="${base%-android}"
-                cp "$f" "dist/${name}-${VERSION}-android.jar"
-              else
-                cp "$f" "dist/${base}-${VERSION}.jar"
-              fi
-            done
-            shopt -u nullglob
+          rm -rf dist
+          gradle_cmd="gradle"
+          if [ -f ./gradlew ]; then
+            chmod +x ./gradlew
+            gradle_cmd="./gradlew"
           fi
-
-          if [ -z "$(ls -A dist 2>/dev/null)" ] && [ -f build.gradle ]; then
-            gradle_cmd="gradle"
-            if [ -f ./gradlew ]; then
-              chmod +x ./gradlew
-              gradle_cmd="./gradlew"
-            fi
-
-            tasks="$($gradle_cmd -q tasks --all || true)"
-            if printf '%s\n' "$tasks" | grep -q '^deploy '; then
-              $gradle_cmd --no-daemon clean deploy
-            elif printf '%s\n' "$tasks" | grep -q '^jarAndroid '; then
-              $gradle_cmd --no-daemon clean jar jarAndroid
-            elif printf '%s\n' "$tasks" | grep -q '^jar '; then
-              $gradle_cmd --no-daemon clean jar
-            fi
-
-            if [ -d build/libs ]; then
-              shopt -s nullglob
-              for f in build/libs/*.zip build/libs/*.jar; do
-                bn="$(basename "$f")"
-                case "$bn" in
-                  *-raw.jar|*-d8-input.jar) continue ;;
-                esac
-                cp "$f" "dist/$bn"
-              done
-              shopt -u nullglob
-            fi
-          fi
-
-          if [ -z "$(ls -A dist 2>/dev/null)" ]; then
-            echo "No release artifacts found."
-            exit 1
-          fi
-
-      - name: Push release commit and tag
-        if: steps.plan.outputs.should_release == 'true'
-        id: push
-        shell: bash
-        env:
-          TAG: ${{ steps.plan.outputs.tag }}
-        run: |
-          set -euo pipefail
-          if git rev-parse "$TAG" >/dev/null 2>&1; then
-            echo "Tag $TAG already exists."
-            exit 1
-          fi
-
-          git tag "$TAG"
-          git push origin HEAD:main
-          git push origin "$TAG"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-
-      - name: Upload workflow artifact
-        if: steps.plan.outputs.should_release == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-${{ steps.plan.outputs.tag }}
-          path: dist/*
+          $gradle_cmd --no-daemon clean deploy
 
       - name: Create GitHub Release
-        if: steps.plan.outputs.should_release == 'true'
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.push.outputs.tag }}
-          body_path: release-notes.md
-          files: dist/*
+          generate_release_notes: true
+          files: |
+            dist/*.jar
+            dist/*.zip
