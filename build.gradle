@@ -17,15 +17,16 @@ def localMindustryLibs = fileTree(dir: localMindustryLibDir, include: "*.jar").f
 
 repositories{
     mavenCentral()
+    maven{ url "https://raw.githubusercontent.com/Zelaux/MindustryRepo/master/repository" }
     maven{ url "https://jitpack.io" }
 }
 
 configurations.configureEach{
     resolutionStrategy.eachDependency{ details ->
-        // Mindustry v154.3 can request Arc modules by commit hash, but JitPack hosts tag versions.
+        // Mindustry tags can request Arc modules by commit hash.
         if(details.requested.group == "com.github.Anuken.Arc" && details.requested.version == "ec5df18e54"){
             details.useVersion(arcVersion)
-            details.because("Use JitPack Arc tag artifacts to avoid unavailable commit coordinates")
+            details.because("Use published Arc tag artifacts")
         }
     }
 }
