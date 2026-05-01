@@ -3,7 +3,7 @@ plugins{
 }
 
 group = "powergridminimap"
-version = "1.15.2"
+version = "1.17.0"
 
 java{
     sourceCompatibility = JavaVersion.VERSION_1_8
@@ -12,6 +12,8 @@ java{
 
 def mindustryVersion = (findProperty("mindustryVersion") ?: "v154.3").toString()
 def arcVersion = (findProperty("arcVersion") ?: mindustryVersion).toString()
+def localMindustryLibDir = file((findProperty("mindustryLibsDir") ?: "C:/Users/华硕/Documents/MyMod/MindustryKotlinModTemplate-master/libs").toString())
+def localMindustryLibs = fileTree(dir: localMindustryLibDir, include: "*.jar").files
 
 repositories{
     mavenCentral()
@@ -32,9 +34,19 @@ dependencies{
     // Prefer building against a local Mindustry source checkout (as an included subproject).
     if(rootProject.findProject(":core") != null){
         compileOnly project(":core")
+    }else if(!localMindustryLibs.isEmpty()){
+        compileOnly files(localMindustryLibs)
     }else{
         // Standalone build: fetch Mindustry core from JitPack.
         compileOnly "com.github.Anuken.MindustryJitpack:core:$mindustryVersion"
+    }
+
+    def mindustryXClasses = [
+        new File(rootDir.parentFile, "MindustryX-main/work/core/build/classes/java/main"),
+        new File(rootDir.parentFile, "MindustryX-main/work/core/build/classes/kotlin/main")
+    ].findAll{ it.exists() }
+    if(!mindustryXClasses.isEmpty()){
+        compileOnly files(mindustryXClasses)
     }
 }
 
@@ -43,6 +55,14 @@ tasks.withType(JavaCompile).configureEach{
     if(JavaVersion.current().isCompatibleWith(JavaVersion.VERSION_1_9)){
         options.release.set(8)
     }
+}
+
+tasks.withType(Jar).configureEach{
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+tasks.withType(Zip).configureEach{
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }
 
 tasks.register("zipMod", Zip){

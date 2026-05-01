@@ -16,20 +16,20 @@ import arc.math.geom.Rect;
 import arc.scene.Element;
 import arc.scene.event.ClickListener;
 import arc.scene.event.InputEvent;
+import arc.scene.event.Touchable;
 import arc.scene.style.TextureRegionDrawable;
 import arc.scene.ui.Label;
 import arc.scene.ui.TextButton;
+import arc.scene.ui.layout.Scl;
 import arc.scene.ui.layout.Table;
 import arc.struct.ObjectSet;
 import arc.struct.Seq;
 import arc.util.Align;
 import arc.util.CommandHandler;
+import arc.util.Log;
 import arc.util.Time;
 import arc.util.Tmp;
 import arc.util.pooling.Pools;
-import arc.scene.event.Touchable;
-import arc.scene.ui.layout.Scl;
-import arc.util.Log;
 import arc.graphics.Pixmap;
 import arc.graphics.Texture;
 import arc.graphics.g2d.TextureRegion;
@@ -42,6 +42,9 @@ import arc.struct.IntSet;
 import arc.struct.LongSeq;
 import arc.util.Structs;
 import arc.util.Strings;
+import mdtxcompat.LegacyMindustryXGuard;
+import mdtxcompat.MarkerBridge;
+import mdtxcompat.OverlayUiBridge;
 import mindustry.content.Blocks;
 import mindustry.core.UI;
 import mindustry.game.EventType.ClientLoadEvent;
@@ -52,6 +55,7 @@ import mindustry.game.EventType.BuildTeamChangeEvent;
 import mindustry.game.EventType.ConfigEvent;
 import mindustry.game.EventType.WorldLoadEvent;
 import mindustry.game.EventType.Trigger;
+import mindustry.game.MapObjectives;
 import mindustry.game.Team;
 import mindustry.graphics.Drawf;
 import mindustry.graphics.Pal;
@@ -61,6 +65,7 @@ import mindustry.gen.Icon;
 import mindustry.gen.Player;
 import mindustry.mod.Scripts;
 import mindustry.ui.Fonts;
+import mindustry.ui.dialogs.SettingsMenuDialog;
 import mindustry.ui.Styles;
 import mindustry.world.blocks.power.PowerNode;
 import mindustry.world.blocks.power.PowerGraph;
@@ -68,8 +73,10 @@ import mindustry.mod.Mods;
 import rhino.ScriptableObject;
 
 import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import java.util.Arrays;
+import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static mindustry.Vars.control;
 import static mindustry.Vars.player;
@@ -80,6 +87,10 @@ import static mindustry.Vars.ui;
 import static mindustry.Vars.world;
 
 public class PowerGridMinimapMod extends mindustry.mod.Mod{
+    /** When true, this mod is running as a bundled component inside Neon. */
+    public static boolean bekBundled = false;
+
+
     private static final String overlayName = "pgmm-overlay";
     private static final String mi2OverlayName = "pgmm-overlay-mi2-minimap";
     private static final String powerTableName = "pgmm-power-table";
@@ -111,6 +122,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
     private static final String keyPowerTableEnabled = "pgmm-power-table";
     private static final String keyPowerTableThreshold = "pgmm-power-table-threshold";
     private static final String keyPowerTableBgAlpha = "pgmm-power-table-bgalpha";
+    private static final String markerCompatType = "PGMM";
     //debounce cache rebuilds after block changes (tenths of a second)
     private static final String keyUpdateWaitTenths = "pgmm-updatewait";
     //Ignore power grids whose functional area (producers/consumers/batteries) is below this threshold (tiles^2).
@@ -135,11 +147,11 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
     private final Vec2 tmpGridCenter = new Vec2();
     private final RescueAlert rescueAlert = new RescueAlert();
     private final PowerTableOverlay powerTable = new PowerTableOverlay();
-    private final MindustryXMarkers xMarkers = new MindustryXMarkers();
-    //MindustryX OverlayUI integration (optional): if MindustryX exists, register our power-table as a proper OverlayUI panel.
-    //This is done via reflection so vanilla clients don't crash.
-    private final MindustryXOverlayUI xOverlayUi = new MindustryXOverlayUI();
-    private Object xPowerTableWindow = null;
+    private final MarkerBridge xMarkers;
+    private final NativeMarkers nativeMarkers = new NativeMarkers();
+    // MindustryX OverlayUI integration is injected by the dedicated mainX entry.
+    private final OverlayUiBridge xOverlayUi;
+    private OverlayUiBridge.OverlayWindowHandle xPowerTableWindow = null;
     private boolean lastPowerTableEnabled = false;
     private float nextSplitAlertMultiplayerChatAt = 0f;
     private final Mi2MinimapIntegration mi2 = new Mi2MinimapIntegration();
@@ -147,6 +159,12 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
     private boolean consoleApiLogged = false;
 
     public PowerGridMinimapMod(){
+        this(vanillaMarkers(), OverlayUiBridge.UNSUPPORTED);
+    }
+
+    protected PowerGridMinimapMod(MarkerBridge markers, OverlayUiBridge overlayUi){
+        xMarkers = markers;
+        xOverlayUi = overlayUi;
         Events.on(ClientLoadEvent.class, e -> {
             Core.settings.defaults(keyEnabled, true);
             Core.settings.defaults(keyGridAlpha, 40);
@@ -183,7 +201,6 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             refreshMarkerColor();
             refreshReconnectColor();
             refreshRescueColor();
-            xMarkers.tryInit();
             mi2.tryInit();
             installConsoleApi();
             Time.runTask(10f, this::installConsoleApi);
@@ -222,14 +239,14 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             //OverlayUI.Window visibility is controlled by its own persisted setting (`overlayUI.<name>`), not our PGMM setting.
             //To keep UX consistent ("enable power table" == it shows up), we mirror our boolean into OverlayUI's enabled.
             //Important: only sync on setting changes so players can hide the window from OverlayUI without us forcing it back on.
-            if(xPowerTableWindow != null){
+            if(xPowerTableWindow != null && xPowerTableWindow.asElement() != null){
                 boolean enabled = Core.settings.getBool(keyPowerTableEnabled, false);
                 if(enabled != lastPowerTableEnabled){
                     lastPowerTableEnabled = enabled;
                     if(enabled){
-                        xOverlayUi.setEnabledAndPinned(xPowerTableWindow, true, false);
+                        xPowerTableWindow.setEnabledAndPinned(true, false);
                     }else{
-                        xOverlayUi.setEnabledAndPinned(xPowerTableWindow, false, false);
+                        xPowerTableWindow.setEnabledAndPinned(false, false);
                     }
                 }
             }
@@ -294,6 +311,11 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             refreshMi2Overlay("refresh".equals(mode));
             if(player != null) player.sendMessage("[accent]PGMM MI2 overlay: " + mode + "[]");
         });
+    }
+
+    private static MarkerBridge vanillaMarkers(){
+        LegacyMindustryXGuard.rejectLegacyMindustryX("Power Grid Minimap");
+        return MarkerBridge.UNSUPPORTED;
     }
 
     /** F8 console helper object: use {@code pgmm.help()} / {@code pgmm.restart()} / {@code pgmm.rescan()} / {@code pgmm.mi2Refresh()}. */
@@ -413,9 +435,14 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
 
     private void registerSettings(){
         if(ui == null || ui.settings == null) return;
+        if(bekBundled) return;
+
 
         String category = Core.bundle.get("pgmm.category", "Power Grid Minimap");
-        ui.settings.addCategory(category, Icon.powerSmall, table -> {
+        ui.settings.addCategory(category, Icon.powerSmall, this::bekBuildSettings);
+    }
+    /** Populates a {@link mindustry.ui.dialogs.SettingsMenuDialog.SettingsTable} with this mod's settings. */
+    public void bekBuildSettings(SettingsMenuDialog.SettingsTable table){
             // Match MindustryX settings style (icon + Tex.button rows + wrapped titles).
             table.pref(new PgmmSettingsWidgets.HeaderSetting(Core.bundle.get("pgmm.section.basic", "Basic"), Icon.settings));
             table.pref(new PgmmSettingsWidgets.IconCheckSetting(keyEnabled, true, Icon.eyeSmall, null));
@@ -466,8 +493,8 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             table.pref(new PgmmSettingsWidgets.HeaderSetting(Core.bundle.get("pgmm.section.update", "Update"), Icon.refreshSmall));
             table.pref(new PgmmSettingsWidgets.IconCheckSetting(GithubUpdateCheck.enabledKey(), true, Icon.refreshSmall, null));
             table.pref(new PgmmSettingsWidgets.IconCheckSetting(GithubUpdateCheck.showDialogKey(), true, Icon.infoSmall, null));
-        });
     }
+
 
     private void refreshMarkerColor(){
         Color out = markerColor;
@@ -493,6 +520,21 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
         }
     }
 
+    private static String cleanMarkerLabel(String text){
+        return text == null ? "" : Strings.stripColors(text)
+            .replace('\n', ' ')
+            .replace('\r', ' ')
+            .replace("<", "")
+            .replace(">", "")
+            .replace("(", "")
+            .replace(")", "")
+            .trim();
+    }
+
+    private static String formatCompatMarkerMessage(String label, int tileX, int tileY){
+        return "<" + markerCompatType + "><" + cleanMarkerLabel(label) + ">(" + tileX + "," + tileY + ")";
+    }
+
     private void trySendSplitAlertMultiplayerChat(int tileX, int tileY){
         if(!Core.settings.getBool(keySplitAlertMultiplayerEnabled, false)) return;
         if(mindustry.Vars.net == null || !mindustry.Vars.net.active()) return;
@@ -502,7 +544,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
         int intervalSeconds = Mathf.clamp(Core.settings.getInt(keySplitAlertMultiplayerIntervalSeconds, 8), 1, 60);
         nextSplitAlertMultiplayerChatAt = Time.time + intervalSeconds * 60f;
 
-        Call.sendChatMessage("<PGMM><[red]断电建议连接点[]>(" + tileX + "," + tileY + ")");
+        Call.sendChatMessage(formatCompatMarkerMessage(Core.bundle.get("pgmm.mark.reconnect", "Reconnect point"), tileX, tileY));
     }
 
     private void ensureOverlayAttached(){
@@ -535,14 +577,14 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
 
         //Prefer MindustryX OverlayUI if available, so the table becomes a proper Overlay panel (draggable/pinnable).
         //WayzerMapBrowser follows the same pattern: use OverlayUI when installed, otherwise fall back to normal HUD/Core.scene UI.
-        if(xOverlayUi.isInstalled()){
+        if(xOverlayUi.isSupported()){
             if(xPowerTableWindow == null){
                 try{
                     //When hosted by OverlayUI, our table must not fight the Window for positioning/sizing.
                     powerTable.setHostedByOverlayUI(true);
                     xPowerTableWindow = xOverlayUi.registerWindow(powerTableName, powerTable, () -> state != null && state.isGame());
-                    if(xPowerTableWindow != null){
-                        xOverlayUi.tryConfigureWindow(xPowerTableWindow, false, true);
+                    if(xPowerTableWindow != null && xPowerTableWindow.asElement() != null){
+                        xPowerTableWindow.configure(false, true);
                         Log.info("PGMM: power table registered to MindustryX OverlayUI.");
                         return;
                     }
@@ -2224,6 +2266,173 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
         int rank;
     }
 
+    private static class NativeMarkers{
+        private static final float markerLifetime = 1800f;
+        private static final float pointRadius = 6f;
+        private static final float pointStroke = 11f;
+        private static final float textYOffset = 14f;
+        private static final Pattern templatedMarkerPattern = Pattern.compile("^<([^<>]*)><([^<>]*)>\\(([-+]?\\d+)\\s*,\\s*([-+]?\\d+)\\)$");
+        private static final Pattern coordPattern = Pattern.compile("\\s*\\(([-+]?\\d+)\\s*,\\s*([-+]?\\d+)\\)\\s*$");
+
+        private boolean available = true;
+        private int nextMarkerSeq = 1;
+
+        void tryMark(String message, int tileX, int tileY){
+            if(!available) return;
+
+            try{
+                String label = buildLabel(message);
+                Color color = resolveColor(message);
+                float worldX = tileX * tilesize;
+                float worldY = tileY * tilesize;
+
+                int pointId = nextMarkerId();
+                int textId = pointId + 1;
+
+                MapObjectives.PointMarker pointMarker = new MapObjectives.PointMarker(Math.round(worldX), Math.round(worldY), pointRadius, pointStroke, color);
+                pointMarker.minimap = true;
+                Call.createMarker(pointId, pointMarker);
+
+                boolean textCreated = false;
+                if(!label.isEmpty()){
+                    MapObjectives.TextMarker textMarker = new MapObjectives.TextMarker(label, worldX, worldY + textYOffset);
+                    Call.createMarker(textId, textMarker);
+                    textCreated = true;
+                }
+
+                boolean finalTextCreated = textCreated;
+                Time.run(markerLifetime, () -> {
+                    tryRemove(pointId);
+                    if(finalTextCreated){
+                        tryRemove(textId);
+                    }
+                });
+            }catch(Throwable t){
+                available = false;
+                Log.err("PGMM native marker call failed; disabling integration.", t);
+            }
+        }
+
+        private void tryRemove(int markerId){
+            try{
+                Call.removeMarker(markerId);
+            }catch(Throwable ignored){
+                available = false;
+            }
+        }
+
+        private int nextMarkerId(){
+            int playerPart = player == null ? 0 : (player.id & 1023);
+            int id = (playerPart << 20) | (nextMarkerSeq++ << 1);
+            if(nextMarkerSeq >= (1 << 19)){
+                nextMarkerSeq = 1;
+            }
+            return Math.max(id, 2);
+        }
+
+        private String buildLabel(String message){
+            if(message == null) return "";
+
+            String plain = Strings.stripColors(message.trim()).trim();
+            Matcher templated = templatedMarkerPattern.matcher(plain);
+            if(templated.matches()){
+                String second = sanitizeLabel(templated.group(2));
+                if(!second.isEmpty()) return second;
+                return sanitizeLabel(templated.group(1));
+            }
+
+            Matcher coordMatcher = coordPattern.matcher(plain);
+            if(coordMatcher.find()){
+                plain = plain.substring(0, coordMatcher.start()).trim();
+            }
+
+            plain = plain.replace('<', ' ').replace('>', ' ').trim();
+            if(plain.length() > 24){
+                plain = plain.substring(0, 24);
+            }
+            return plain;
+        }
+
+        private String sanitizeLabel(String text){
+            return cleanMarkerLabel(text);
+        }
+
+        private Color resolveColor(String message){
+            if(message == null) return Color.white.cpy();
+
+            String trimmed = message.trim();
+            if(trimmed.startsWith("[")){
+                int end = trimmed.indexOf(']');
+                if(end > 1){
+                    Color parsed = parseColorTag(trimmed.substring(1, end));
+                    if(parsed != null) return parsed;
+                }
+            }
+
+            String plain = Strings.stripColors(trimmed).trim();
+            Matcher templated = templatedMarkerPattern.matcher(plain);
+            if(templated.matches()){
+                Color parsed = resolveTemplateColor(sanitizeLabel(templated.group(2)));
+                if(parsed != null) return parsed;
+            }
+
+            return Color.white.cpy();
+        }
+
+        private Color resolveTemplateColor(String label){
+            String clean = sanitizeLabel(label);
+            if(clean.isEmpty()) return null;
+
+            if(clean.equalsIgnoreCase(cleanMarkerLabel(Core.bundle.get("pgmm.mark.reconnect", "Reconnect point")))){
+                return Color.orange.cpy();
+            }
+            if(clean.equalsIgnoreCase(cleanMarkerLabel(Core.bundle.get("pgmm.mark.rescue", "Power rescue")))){
+                return Color.scarlet.cpy();
+            }
+            return null;
+        }
+
+        private Color parseColorTag(String tag){
+            if(tag == null) return null;
+
+            String normalized = tag.trim();
+            if(normalized.isEmpty()) return null;
+
+            String lower = normalized.toLowerCase(Locale.ROOT);
+            if("orange".equals(lower)) return Color.orange.cpy();
+            if("scarlet".equals(lower)) return Color.scarlet.cpy();
+            if("red".equals(lower)) return Color.red.cpy();
+            if("white".equals(lower)) return Color.white.cpy();
+            if("yellow".equals(lower)) return Color.yellow.cpy();
+
+            if(normalized.startsWith("#")){
+                normalized = normalized.substring(1);
+            }
+
+            if(normalized.length() != 6 && normalized.length() != 8) return null;
+
+            try{
+                long parsed = Long.parseLong(normalized, 16);
+                Color out = new Color();
+                if(normalized.length() == 6){
+                    float r = ((parsed >> 16) & 0xff) / 255f;
+                    float g = ((parsed >> 8) & 0xff) / 255f;
+                    float b = (parsed & 0xff) / 255f;
+                    out.set(r, g, b, 1f);
+                }else{
+                    float r = ((parsed >> 24) & 0xff) / 255f;
+                    float g = ((parsed >> 16) & 0xff) / 255f;
+                    float b = ((parsed >> 8) & 0xff) / 255f;
+                    float a = (parsed & 0xff) / 255f;
+                    out.set(r, g, b, a);
+                }
+                return out;
+            }catch(Throwable ignored){
+                return null;
+            }
+        }
+    }
+
     private class SplitAlert{
         private ReconnectHint hint;
         private float textExpiresAt = 0f;
@@ -2255,7 +2464,9 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             int tileX = Mathf.clamp((int)(midWorldX / tilesize), 0, world.width() - 1);
             int tileY = Mathf.clamp((int)(midWorldY / tilesize), 0, world.height() - 1);
             trySendSplitAlertMultiplayerChat(tileX, tileY);
-            xMarkers.markReconnect(tileX, tileY);
+            String text = formatCompatMarkerMessage(Core.bundle.get("pgmm.mark.reconnect", "Reconnect point"), tileX, tileY);
+            xMarkers.mark(text, tileX, tileY);
+            nativeMarkers.tryMark(text, tileX, tileY);
         }
 
         void drawHudMinimapMarker(float invScale, Rect viewRect){
@@ -2391,7 +2602,9 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
                     tileY = Mathf.clamp((int)(h.centerY / tilesize), 0, world.height() - 1);
                 }
                 if(tileX >= 0 && tileY >= 0){
-                    xMarkers.markRescue(tileX, tileY);
+                    String text = formatCompatMarkerMessage(Core.bundle.get("pgmm.mark.rescue", "Power rescue"), tileX, tileY);
+                    xMarkers.mark(text, tileX, tileY);
+                    nativeMarkers.tryMark(text, tileX, tileY);
                 }
             }
         }
@@ -2807,127 +3020,6 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
 
             if(shown == 0){
                 add(Core.bundle.get("pgmm.powertable.none", "No grids above threshold.")).color(cKey).padTop(4f).row();
-            }
-        }
-    }
-
-    /** Optional integration with MindustryX OverlayUI. Uses reflection so vanilla builds won't crash. */
-    private static class MindustryXOverlayUI{
-        private boolean initialized = false;
-        private boolean installed = false;
-        private Object instance;
-        private Method registerWindow;
-        private Method setAvailability;
-        private Method getData;
-        private Method setEnabled;
-        private Method setPinned;
-        private Method setResizable;
-        private Method setAutoHeight;
-
-        boolean isInstalled(){
-            if(initialized) return installed;
-            initialized = true;
-            try{
-                //Mod ID check; if the user doesn't have MindustryX, we must not touch its classes.
-                installed = mindustry.Vars.mods != null && mindustry.Vars.mods.locateMod("mindustryx") != null;
-            }catch(Throwable ignored){
-                installed = false;
-            }
-            if(!installed) return false;
-
-            try{
-                //Kotlin `object OverlayUI` => Java sees `OverlayUI.INSTANCE`.
-                Class<?> c = Class.forName("mindustryX.features.ui.OverlayUI");
-                instance = c.getField("INSTANCE").get(null);
-                registerWindow = c.getMethod("registerWindow", String.class, Table.class);
-            }catch(Throwable t){
-                installed = false;
-                Log.err("PGMM: MindustryX detected but OverlayUI reflection init failed.", t);
-                return false;
-            }
-            return true;
-        }
-
-        Object registerWindow(String name, Table table, Prov<Boolean> availability){
-            if(!isInstalled()) return null;
-            try{
-                //Returns an OverlayUI.Window instance (we keep it as Object to avoid a hard dependency).
-                Object window = registerWindow.invoke(instance, name, table);
-                tryInitWindowAccessors(window);
-                if(window != null && availability != null && setAvailability != null){
-                    setAvailability.invoke(window, availability);
-                }
-                return window;
-            }catch(Throwable t){
-                Log.err("PGMM: OverlayUI.registerWindow failed.", t);
-                return null;
-            }
-        }
-
-        void tryConfigureWindow(Object window, boolean autoHeight, boolean resizable){
-            if(window == null) return;
-            try{
-                tryInitWindowAccessors(window);
-                if(setAutoHeight != null) setAutoHeight.invoke(window, autoHeight);
-                if(setResizable != null) setResizable.invoke(window, resizable);
-            }catch(Throwable ignored){
-            }
-        }
-
-        void setEnabledAndPinned(Object window, boolean enabled, boolean pinned){
-            if(window == null) return;
-            try{
-                tryInitWindowAccessors(window);
-                if(getData == null) return;
-                Object data = getData.invoke(window);
-                if(data == null) return;
-                //OverlayUI.Window has a SettingsV2-backed `data` object: toggling it persists window state.
-                if(setEnabled != null) setEnabled.invoke(data, enabled);
-                if(pinned && setPinned != null) setPinned.invoke(data, true);
-            }catch(Throwable ignored){
-            }
-        }
-
-        private void tryInitWindowAccessors(Object window){
-            if(window == null) return;
-            if(getData != null || setAvailability != null) return;
-            try{
-                Class<?> wc = window.getClass();
-                try{
-                    //Kotlin property `var availability` => Java setter `setAvailability(Prov)`.
-                    setAvailability = wc.getMethod("setAvailability", Prov.class);
-                }catch(Throwable ignored){
-                    setAvailability = null;
-                }
-                try{
-                    setResizable = wc.getMethod("setResizable", boolean.class);
-                }catch(Throwable ignored){
-                    setResizable = null;
-                }
-                try{
-                    setAutoHeight = wc.getMethod("setAutoHeight", boolean.class);
-                }catch(Throwable ignored){
-                    setAutoHeight = null;
-                }
-                getData = wc.getMethod("getData");
-
-                Object data = getData.invoke(window);
-                if(data != null){
-                    Class<?> dc = data.getClass();
-                    try{
-                        //Kotlin property `var enabled` => Java setter `setEnabled(boolean)`.
-                        setEnabled = dc.getMethod("setEnabled", boolean.class);
-                    }catch(Throwable ignored){
-                        setEnabled = null;
-                    }
-                    try{
-                        //Kotlin property `var pinned` => Java setter `setPinned(boolean)`.
-                        setPinned = dc.getMethod("setPinned", boolean.class);
-                    }catch(Throwable ignored){
-                        setPinned = null;
-                    }
-                }
-            }catch(Throwable ignored){
             }
         }
     }
@@ -3958,50 +4050,4 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
         float ax, ay, bx, by;
     }
 
-    /** Optional integration with MindustryX "mark" feature. Uses reflection so vanilla builds won't crash. */
-    private static class MindustryXMarkers{
-        private boolean initialized = false;
-        private boolean available = false;
-        private java.lang.reflect.Method newMarkFromChat;
-
-        void tryInit(){
-            if(initialized) return;
-            initialized = true;
-            try{
-                Class<?> markerType = Class.forName("mindustryX.features.MarkerType");
-                // public static void newMarkFromChat(String text, Vec2 pos)
-                newMarkFromChat = markerType.getMethod("newMarkFromChat", String.class, Vec2.class);
-                available = true;
-                Log.info("PGMM: MindustryX marker API detected.");
-            }catch(Throwable ignored){
-                available = false;
-            }
-        }
-
-        void markReconnect(int tileX, int tileY){
-            if(!available || newMarkFromChat == null) return;
-            try{
-                //MindustryX FormatDefault.formatTile expects world coords; its newMarkFromChat scales tile coords by tilesize internally.
-                String label = Core.bundle.get("pgmm.mark.reconnect", "Reconnect point");
-                String text = "[orange]" + label + "[] (" + tileX + "," + tileY + ")";
-                newMarkFromChat.invoke(null, text, new Vec2(tileX, tileY));
-            }catch(Throwable t){
-                //Disable after first failure to avoid spam.
-                available = false;
-                Log.err("PGMM: MindustryX marker call failed; disabling integration.", t);
-            }
-        }
-
-        void markRescue(int tileX, int tileY){
-            if(!available || newMarkFromChat == null) return;
-            try{
-                String label = Core.bundle.get("pgmm.mark.rescue", "Power rescue");
-                String text = "[scarlet]" + label + "[] (" + tileX + "," + tileY + ")";
-                newMarkFromChat.invoke(null, text, new Vec2(tileX, tileY));
-            }catch(Throwable t){
-                available = false;
-                Log.err("PGMM: MindustryX marker call failed; disabling integration.", t);
-            }
-        }
-    }
 }

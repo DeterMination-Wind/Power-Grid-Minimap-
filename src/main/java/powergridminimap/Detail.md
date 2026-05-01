@@ -1,23 +1,37 @@
-# Detail: src\main\java\powergridminimap
+# src/main/java/powergridminimap 详细说明
 
-## 这一层在做什么
-这一层是 PGMM 最核心的 Java 包层，真正决定模组如何扫描电网、绘制叠加、显示电力表、给出救援建议、检查更新和对接外部 UI 的业务实现基本都在这里。
+目录路径：`src/main/java/powergridminimap`
 
-## 这一层直接包含什么
-### 直接子目录
+## 本层定位
+- 这一层承载 Power Grid Minimap 的主实现，是仓库里最重的功能包之一：电网扫描、分裂检测、重连建议、救援建议、HUD、全图叠加和电力表窗口都集中在这里。
+
+## 当前内容
+- 直接子目录数：0。
+- 直接文件数：4。
+- 递归下级目录数：0。
+- 递归文件数：4。
 - 本层没有直接子目录。
+- 直接文件：`GithubUpdateCheck.java`、`PgmmSettingsWidgets.java`、`PgmmTypes.java`、`PowerGridMinimapMod.java`。
 
-### 直接文件
-- GithubUpdateCheck.java（25.10 KB）
-- PgmmSettingsWidgets.java（8.63 KB）
-- PgmmTypes.java（2.70 KB）
-- PowerGridMinimapMod.java（167.20 KB）
+## 实现方式
+- `PowerGridMinimapMod` 通过客户端加载、世界事件和 `Trigger.update/draw/uiDrawEnd` 驱动缓存失效与重算；核心数据来自 PowerGraph 扫描，而不是自建模拟。
+- `PgmmSettingsWidgets` 提供定制设置行，`PgmmTypes` 提供数据结构，`GithubUpdateCheck` 处理子模组级更新提示。
+- 模块支持 MindustryX OverlayUI、MI2 小地图和 Rhino 控制台 API，因此除了主逻辑外还承担多种外部集成桥接。
 
-## 这一层如何实现自己的职责
-当前共有四个源码文件。PowerGridMinimapMod.java 约三千四百多行，是总控文件，负责事件注册、Core.settings 默认值、设置页、缓存更新、小地图和全屏地图绘制、世界坐标救援叠加、Power Table、MI2 集成、MindustryX OverlayUI 反射适配、控制台 API、SplitWatcher 与 RescueAdvisor。PgmmSettingsWidgets.java 把设置项封装成 MindustryX 风格的行组件，统一了 Tex.button 背景、左侧图标、可换行标题和叠加式滑条值显示。PgmmTypes.java 放置 GridInfo、MarkerInfo、MarkerRectInfo 和 FullMinimapAccess 等轻量类型与反射工具。GithubUpdateCheck.java 则负责通过 GitHub Releases API 检查新版本、展示对话框、下载并安装更新，必要时触发应用重启。
+## 与其他层级的关系
+- 向上被 Neon 聚合为一个设置分组和客户端命令源；向下依赖 bundles 文案、UI 层和世界状态层。
 
-## 这一层与其他层级的关系
-它向上依赖 src/main/resources/bundles 提供所有可见文本，向下被编译成 build/classes/.../powergridminimap 与 bin/main/powergridminimap。根目录那些专题文档基本都是围绕这一层的具体机制展开说明。
+## 本层文件解读
+- `GithubUpdateCheck.java`: Java source，Mod implementation source code.，大小 25.1 KB。 声明类型：GithubUpdateCheck, AssetInfo, ReleaseInfo；公开/受保护方法约 0 个
+- `PgmmSettingsWidgets.java`: Java source，Mod implementation source code.，大小 8.6 KB。 声明类型：PgmmSettingsWidgets, HeaderSetting, IconCheckSetting, IconSliderSetting, IconTextSetting；公开/受保护方法约 1 个
+- `PgmmTypes.java`: Java source，Mod implementation source code.，大小 2.7 KB。 声明类型：GridInfo, MarkerInfo, MarkerRectInfo, FullMinimapAccess；公开/受保护方法约 0 个
+- `PowerGridMinimapMod.java`: Java source，Mod implementation source code.，大小 164.2 KB。 声明类型：PowerGridMinimapMod, PgmmConsoleApi, MinimapOverlay, Mi2MinimapIntegration, Mi2Overlay；公开/受保护方法约 25 个，含聚合设置入口; 含打包标记; 含 OverlayUI 集成; 含客户端命令注册
 
-## 阅读这一层时要注意什么
-如果未来要继续提高清晰度，最值得做的不是再加目录，而是把 PowerGridMinimapMod.java 内已经形成子系统的内部类继续外提成独立文件。
+## 维护关注点
+- 这是性能和复杂度双高的模块，目录级说明必须强调它是事件驱动加缓存驱动，而不是每帧全量扫描。
+- 这一层更接近事实来源，做结构或行为调整应优先改这里，再通过构建链刷新下游。
+
+## 层级关系速记
+- 上层目录：`src/main/java`。
+- 下层入口：无。
+- 当前文档由 `tools/generate_detail.py` 依据工作区实时结构与人工摘要生成。
