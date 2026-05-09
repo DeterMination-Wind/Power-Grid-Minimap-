@@ -30,41 +30,41 @@ public class MindustryXOverlayUiBridge implements OverlayUiBridge {
         }
     };
 
-    private final Object overlayUiInstance;
-    private final Method registerWindowMethod;
-    private final Method getOpenMethod;
-    private final Method toggleMethod;
+    private Object overlayUiInstance;
+    private Method registerWindowMethod;
+    private Method getOpenMethod;
+    private Method toggleMethod;
+    private boolean initialized;
     private boolean available;
 
     public MindustryXOverlayUiBridge() {
-        Object instance = null;
-        Method register = null;
-        Method getOpen = null;
-        Method toggle = null;
+    }
+
+    private synchronized void ensureInitialized() {
+        if (initialized) return;
+        initialized = true;
         try {
             Class<?> overlayUiClass = Class.forName("mindustryX.features.ui.OverlayUI");
             Field instanceField = overlayUiClass.getField("INSTANCE");
-            instance = instanceField.get(null);
-            register = overlayUiClass.getMethod("registerWindow", String.class, Table.class);
-            getOpen = overlayUiClass.getMethod("getOpen");
-            toggle = overlayUiClass.getMethod("toggle");
-            available = instance != null;
+            overlayUiInstance = instanceField.get(null);
+            registerWindowMethod = overlayUiClass.getMethod("registerWindow", String.class, Table.class);
+            getOpenMethod = overlayUiClass.getMethod("getOpen");
+            toggleMethod = overlayUiClass.getMethod("toggle");
+            available = overlayUiInstance != null;
         } catch (Throwable ignored) {
             available = false;
         }
-        overlayUiInstance = instance;
-        registerWindowMethod = register;
-        getOpenMethod = getOpen;
-        toggleMethod = toggle;
     }
 
     @Override
     public boolean isSupported() {
+        ensureInitialized();
         return available;
     }
 
     @Override
     public OverlayWindowHandle registerWindow(String name, Table table, Prov<Boolean> availability) {
+        ensureInitialized();
         if (!available || overlayUiInstance == null || registerWindowMethod == null) return NO_WINDOW;
         try {
             Object window = registerWindowMethod.invoke(overlayUiInstance, name, table);
@@ -84,6 +84,7 @@ public class MindustryXOverlayUiBridge implements OverlayUiBridge {
 
     @Override
     public void closeEditorIfOpen() {
+        ensureInitialized();
         if (!available || overlayUiInstance == null || getOpenMethod == null || toggleMethod == null) return;
         try {
             Object open = getOpenMethod.invoke(overlayUiInstance);
