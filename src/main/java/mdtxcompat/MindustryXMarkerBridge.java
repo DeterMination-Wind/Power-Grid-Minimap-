@@ -6,28 +6,31 @@ import arc.util.Log;
 import java.lang.reflect.Method;
 
 public class MindustryXMarkerBridge implements MarkerBridge {
-    private final Method markMethod;
+    private Method markMethod;
     private boolean available;
+    private boolean initialized = false;
 
-    public MindustryXMarkerBridge() {
-        Method method = null;
+    private void ensureInitialized() {
+        if (initialized) return;
+        initialized = true;
         try {
             Class<?> markerType = Class.forName("mindustryX.features.MarkerType");
-            method = markerType.getMethod("newMarkFromChat", String.class, Vec2.class);
+            markMethod = markerType.getMethod("newMarkFromChat", String.class, Vec2.class);
             available = true;
         } catch (Throwable ignored) {
             available = false;
         }
-        markMethod = method;
     }
 
     @Override
     public boolean isSupported() {
+        ensureInitialized();
         return available;
     }
 
     @Override
     public void mark(String text, int tileX, int tileY) {
+        ensureInitialized();
         if (!available || markMethod == null) return;
         try {
             markMethod.invoke(null, text, new Vec2(tileX, tileY));
