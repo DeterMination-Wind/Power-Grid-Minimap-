@@ -73,6 +73,10 @@ tasks.register("zipMod", Zip){
     archiveFileName = "${project.name}.zip"
     destinationDirectory = layout.buildDirectory.dir("libs")
     from(sourceSets.main.output)
+    from(projectDir){
+        include "mod.json"
+        include "mod.hjson"
+    }
     from("README.md")
 }
 
@@ -83,6 +87,10 @@ tasks.register("jarMod", Jar){
     archiveFileName = "${project.name}.jar"
     destinationDirectory = layout.buildDirectory.dir("libs")
     from(sourceSets.main.output)
+    from(projectDir){
+        include "mod.json"
+        include "mod.hjson"
+    }
     from("README.md")
 }
 

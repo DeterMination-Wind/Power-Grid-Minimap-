@@ -1079,7 +1079,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
                     nextInitAttempt = Time.time + 60f * 2f;
                     return;
                 }
-                if(minimap.getScene() == null || minimap.parent == null){
+                if(minimap.getScene() == null || minimap.parent == null || Core.scene.root == null){
                     detachIfPresent();
                     return;
                 }
@@ -1099,12 +1099,13 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
                 Mi2Overlay overlay = new Mi2Overlay(minimap, cache, markerColor, alert, rescueAlert, rescueColor, rectField, setRectMethod);
                 overlay.name = mi2OverlayName;
                 //important: must have non-zero bounds BEFORE parent culling, otherwise draw() may never run.
-                overlay.setBounds(minimap.x, minimap.y, Math.max(1f, minimap.getWidth()), Math.max(1f, minimap.getHeight()));
+                overlay.setBounds(0f, 0f, Math.max(1f, minimap.getWidth()), Math.max(1f, minimap.getHeight()));
                 overlay.update(overlay::syncBoundsToBase);
                 overlay.touchable = Touchable.disabled;
-                minimap.parent.addChild(overlay);
+                Core.scene.root.addChild(overlay);
+                overlay.syncBoundsToBase();
                 overlay.toFront();
-                Log.info("PGMM: MI2U overlay attached to minimap parent (@).", minimap.parent.getClass().getName());
+                Log.info("PGMM: MI2U overlay attached to scene root.");
             }catch(Throwable t){
                 Log.err("PGMM: MI2U minimap attach failed; will retry.", t);
                 //don't permanently disable; allow retry on next attempt
@@ -1221,7 +1222,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
         }
 
         boolean isAttachedTo(Element minimap){
-            return base == minimap && minimap != null && parent == minimap.parent;
+            return base == minimap && minimap != null && Core.scene != null && parent == Core.scene.root;
         }
 
         void updateAccessors(java.lang.reflect.Field rectField, java.lang.reflect.Method setRectMethod){
@@ -1237,7 +1238,19 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
                 bh = Math.max(bh, base.getPrefHeight());
             }
             if(bw <= 0.001f || bh <= 0.001f) return;
-            setBounds(base.x, base.y, bw, bh);
+
+            Vec2 min = Tmp.v1.set(0f, 0f);
+            Vec2 max = Tmp.v2.set(bw, bh);
+            base.localToStageCoordinates(min);
+            base.localToStageCoordinates(max);
+
+            float left = Math.min(min.x, max.x);
+            float bottom = Math.min(min.y, max.y);
+            float right = Math.max(min.x, max.x);
+            float top = Math.max(min.y, max.y);
+
+            setBounds(left, bottom, right - left, top - bottom);
+            toFront();
         }
 
         @Override
@@ -1346,9 +1359,10 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             boolean ints = font.usesIntegerPositions();
             font.setUseIntegerPositions(false);
 
-            //In the old (world-space) draw, scale was applied by Draw.trans(); here we fold it into the font scale.
+            //Keep MI2U text readable when the minimap is zoomed out; only grow it with the map scale.
             float baseFontScale = (1f / 1.25f) / Math.max(0.0001f, Scl.scl(1f));
-            font.getData().setScale(baseFontScale * invScalePow * markerScale * scale);
+            float screenScale = Math.max(scale, 1f);
+            font.getData().setScale(baseFontScale * invScalePow * markerScale * screenScale);
 
             Color textColor = Tmp.c2.set(markerColor);
             textColor.a *= parentAlpha;
@@ -1367,7 +1381,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
                 float sx = x + (info.x - viewRect.x) * (width / viewRect.width);
                 float sy = y + (info.y - viewRect.y) * (height / viewRect.height);
 
-                float margin = 3f * invScalePow * markerScale * scale;
+                float margin = 3f * invScalePow * markerScale * screenScale;
 
                 Draw.color(0f, 0f, 0f, 0.35f * parentAlpha);
                 Fill.rect(sx, sy, layout.width + margin * 2f, layout.height + margin * 2f);
