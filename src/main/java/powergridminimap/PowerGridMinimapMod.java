@@ -1134,6 +1134,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
                 }
             }
 
+            // Fallback only works in non-mod-isolated test environments.
             try{
                 return Class.forName(minimapClassName);
             }catch(Throwable ignored){
@@ -1250,7 +1251,6 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             float top = Math.max(min.y, max.y);
 
             setBounds(left, bottom, right - left, top - bottom);
-            toFront();
         }
 
         @Override
