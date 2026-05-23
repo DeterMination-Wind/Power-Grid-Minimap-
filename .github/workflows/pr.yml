@@ -1,0 +1,45 @@
+name: PR CI
+
+on:
+  pull_request:
+    branches: [ "**" ]
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android build-tools
+        run: sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Build merged artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle_cmd="gradle"
+          if [ -f ./gradlew ]; then
+            chmod +x ./gradlew
+            gradle_cmd="./gradlew"
+          fi
+          $gradle_cmd --no-daemon clean deploy

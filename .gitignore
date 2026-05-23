@@ -2,6 +2,7 @@
 /build/
 /out/
 /bin/
+/dist/
 /.vscode/
 *.iml
 *.ipr
