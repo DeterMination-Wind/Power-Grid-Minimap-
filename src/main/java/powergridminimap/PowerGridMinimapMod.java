@@ -1079,7 +1079,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
                     nextInitAttempt = Time.time + 60f * 2f;
                     return;
                 }
-                if(minimap.getScene() == null || minimap.parent == null || Core.scene.root == null){
+                if(minimap.getScene() == null || minimap.parent == null){
                     detachIfPresent();
                     return;
                 }
@@ -1099,13 +1099,13 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
                 Mi2Overlay overlay = new Mi2Overlay(minimap, cache, markerColor, alert, rescueAlert, rescueColor, rectField, setRectMethod);
                 overlay.name = mi2OverlayName;
                 //important: must have non-zero bounds BEFORE parent culling, otherwise draw() may never run.
-                overlay.setBounds(0f, 0f, Math.max(1f, minimap.getWidth()), Math.max(1f, minimap.getHeight()));
+                overlay.setBounds(minimap.x, minimap.y, Math.max(1f, minimap.getWidth()), Math.max(1f, minimap.getHeight()));
                 overlay.update(overlay::syncBoundsToBase);
                 overlay.touchable = Touchable.disabled;
-                Core.scene.root.addChild(overlay);
+                minimap.parent.addChild(overlay);
                 overlay.syncBoundsToBase();
                 overlay.toFront();
-                Log.info("PGMM: MI2U overlay attached to scene root.");
+                Log.info("PGMM: MI2U overlay attached to MI2U minimap parent.");
             }catch(Throwable t){
                 Log.err("PGMM: MI2U minimap attach failed; will retry.", t);
                 //don't permanently disable; allow retry on next attempt
@@ -1223,7 +1223,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
         }
 
         boolean isAttachedTo(Element minimap){
-            return base == minimap && minimap != null && Core.scene != null && parent == Core.scene.root;
+            return base == minimap && minimap != null && minimap.parent != null && parent == minimap.parent;
         }
 
         void updateAccessors(java.lang.reflect.Field rectField, java.lang.reflect.Method setRectMethod){
@@ -1233,6 +1233,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
 
         void syncBoundsToBase(){
             if(base == null || parent == null) return;
+            if(base.parent != parent) return;
             float bw = base.getWidth(), bh = base.getHeight();
             if(bw <= 0.001f || bh <= 0.001f){
                 bw = Math.max(bw, base.getPrefWidth());
@@ -1240,17 +1241,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             }
             if(bw <= 0.001f || bh <= 0.001f) return;
 
-            Vec2 min = Tmp.v1.set(0f, 0f);
-            Vec2 max = Tmp.v2.set(bw, bh);
-            base.localToStageCoordinates(min);
-            base.localToStageCoordinates(max);
-
-            float left = Math.min(min.x, max.x);
-            float bottom = Math.min(min.y, max.y);
-            float right = Math.max(min.x, max.x);
-            float top = Math.max(min.y, max.y);
-
-            setBounds(left, bottom, right - left, top - bottom);
+            setBounds(base.x, base.y, bw, bh);
         }
 
         @Override
@@ -1260,7 +1251,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             if(renderer == null || renderer.minimap == null || renderer.minimap.getRegion() == null) return;
             if(world == null || !state.isGame() || world.isGenerating()) return;
             if(base == null || base.getScene() == null) return;
-            if(base.parent == null) return;
+            if(base.parent == null || base.parent != parent) return;
 
             syncBoundsToBase();
             if(width <= 0.001f || height <= 0.001f) return;

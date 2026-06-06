@@ -1,3 +1,8 @@
+## v1.18.1 更新日志（PGMM / Power Grid Minimap）
+
+### 🛠️ Bug 修复
+- 修复：适配 MI2U 小地图的独立坐标系，避免电力叠加层在 MI2U 小地图中偏移或超出小地图范围。
+
 ## v1.14.1 更新日志（PGMM / Power Grid Minimap）
 
 ### 🛠️ Bug 修复
