@@ -1017,6 +1017,8 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
 
         private java.lang.reflect.Field minimapField;
         private java.lang.reflect.Field rectField;
+        private java.lang.reflect.Field zoomField;
+        private java.lang.reflect.Field baseSizeField;
         private java.lang.reflect.Method setRectMethod;
         private float nextInitAttempt = 0f;
 
@@ -1025,6 +1027,8 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
                 available = false;
                 minimapField = null;
                 rectField = null;
+                zoomField = null;
+                baseSizeField = null;
                 setRectMethod = null;
 
                 // MI2U is a separate Java mod, so resolve its classes through each loaded mod classloader.
@@ -1041,6 +1045,8 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
                 Class<?> minimapType = minimap.getClass();
                 rectField = findField(minimapType, "rect"); // public Rect rect
                 if(rectField == null) throw new NoSuchFieldException("rect");
+                zoomField = findField(minimapType, "zoom"); // public float zoom
+                baseSizeField = findField(minimapType, "baseSize"); // private static final float baseSize
                 setRectMethod = findNoArgMethod(minimapType, "setRect");
                 if(setRectMethod == null) throw new NoSuchMethodException("setRect");
 
@@ -1088,7 +1094,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
                 Mi2Overlay existing = findOverlay();
                 if(existing != null){
                     if(existing.isAttachedTo(minimap)){
-                        existing.updateAccessors(rectField, setRectMethod);
+                        existing.updateAccessors(rectField, zoomField, baseSizeField, setRectMethod);
                         existing.syncBoundsToBase();
                         existing.toFront();
                         return;
@@ -1096,7 +1102,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
                     existing.remove();
                 }
 
-                Mi2Overlay overlay = new Mi2Overlay(minimap, cache, markerColor, alert, rescueAlert, rescueColor, rectField, setRectMethod);
+                Mi2Overlay overlay = new Mi2Overlay(minimap, cache, markerColor, alert, rescueAlert, rescueColor, rectField, zoomField, baseSizeField, setRectMethod);
                 overlay.name = mi2OverlayName;
                 //important: must have non-zero bounds BEFORE parent culling, otherwise draw() may never run.
                 overlay.setBounds(minimap.x, minimap.y, Math.max(1f, minimap.getWidth()), Math.max(1f, minimap.getHeight()));
@@ -1206,42 +1212,65 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
         private final Color rescueColor;
 
         private java.lang.reflect.Field rectField;
+        private java.lang.reflect.Field zoomField;
+        private java.lang.reflect.Field baseSizeField;
         private java.lang.reflect.Method setRectMethod;
 
+        private final Rect mapArea = new Rect();
         private final Rect viewRect = new Rect();
         private boolean loggedDraw = false;
         private boolean loggedClipFail = false;
 
-        Mi2Overlay(Element base, PowerGridCache cache, Color markerColor, SplitAlert alert, RescueAlert rescueAlert, Color rescueColor, java.lang.reflect.Field rectField, java.lang.reflect.Method setRectMethod){
+        Mi2Overlay(Element base, PowerGridCache cache, Color markerColor, SplitAlert alert, RescueAlert rescueAlert, Color rescueColor, java.lang.reflect.Field rectField, java.lang.reflect.Field zoomField, java.lang.reflect.Field baseSizeField, java.lang.reflect.Method setRectMethod){
             this.base = base;
             this.cache = cache;
             this.markerColor = markerColor;
             this.alert = alert;
             this.rescueAlert = rescueAlert;
             this.rescueColor = rescueColor;
-            updateAccessors(rectField, setRectMethod);
+            updateAccessors(rectField, zoomField, baseSizeField, setRectMethod);
         }
 
         boolean isAttachedTo(Element minimap){
             return base == minimap && minimap != null && minimap.parent != null && parent == minimap.parent;
         }
 
-        void updateAccessors(java.lang.reflect.Field rectField, java.lang.reflect.Method setRectMethod){
+        void updateAccessors(java.lang.reflect.Field rectField, java.lang.reflect.Field zoomField, java.lang.reflect.Field baseSizeField, java.lang.reflect.Method setRectMethod){
             this.rectField = rectField;
+            this.zoomField = zoomField;
+            this.baseSizeField = baseSizeField;
             this.setRectMethod = setRectMethod;
         }
 
         void syncBoundsToBase(){
             if(base == null || parent == null) return;
             if(base.parent != parent) return;
+            if(!updateMapArea()) return;
+
+            setBounds(mapArea.x, mapArea.y, mapArea.width, mapArea.height);
+        }
+
+        private boolean updateMapArea(){
+            if(base == null) return false;
             float bw = base.getWidth(), bh = base.getHeight();
             if(bw <= 0.001f || bh <= 0.001f){
                 bw = Math.max(bw, base.getPrefWidth());
                 bh = Math.max(bh, base.getPrefHeight());
             }
-            if(bw <= 0.001f || bh <= 0.001f) return;
+            if(bw <= 0.001f || bh <= 0.001f) return false;
 
-            setBounds(base.x, base.y, bw, bh);
+            float areaX = base.x, areaY = base.y, areaW = bw, areaH = bh;
+            float epsilon = Math.max(1f, Math.min(bw, bh) * 0.02f);
+            if(bh > bw + epsilon){
+                areaH = bw;
+                areaY = base.y + bh - areaH;
+            }else if(bw > bh + epsilon){
+                areaW = bh;
+            }
+
+            if(areaW <= 0.001f || areaH <= 0.001f) return false;
+            mapArea.set(areaX, areaY, areaW, areaH);
+            return true;
         }
 
         @Override
@@ -1261,11 +1290,9 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
                 Log.info("PGMM: MI2U overlay draw() active (name=@, base=@).", name, base.getClass().getName());
             }
 
-            Rect r = getMi2Rect();
-            if(r == null){
+            if(!updateViewRect(width, height)){
                 return;
             }
-            viewRect.set(r);
             if(viewRect.width <= 0.001f || viewRect.height <= 0.001f) return;
 
             cache.updateBasic();
@@ -1389,6 +1416,19 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
             Pools.free(layout);
         }
 
+        private boolean updateViewRect(float drawW, float drawH){
+            Rect measured = getMi2Rect();
+            if(measured != null){
+                viewRect.set(measured);
+            }
+
+            if(measured == null || shouldRecomputeViewRect(measured, drawW, drawH)){
+                return recomputeViewRect(drawW, drawH, measured);
+            }
+
+            return true;
+        }
+
         private Rect getMi2Rect(){
             try{
                 if(setRectMethod != null){
@@ -1398,6 +1438,45 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
                 return r instanceof Rect ? (Rect)r : null;
             }catch(Throwable ignored){
                 return null;
+            }
+        }
+
+        private boolean shouldRecomputeViewRect(Rect measured, float drawW, float drawH){
+            if(measured == null || measured.width <= 0.001f || measured.height <= 0.001f) return true;
+            if(drawW <= 0.001f || drawH <= 0.001f) return false;
+
+            float measuredAspect = measured.height / measured.width;
+            float drawAspect = drawH / drawW;
+            return Math.abs(measuredAspect - drawAspect) > 0.015f;
+        }
+
+        private boolean recomputeViewRect(float drawW, float drawH, Rect measured){
+            if(drawW <= 0.001f || drawH <= 0.001f) return false;
+
+            float baseSize = getNumberField(baseSizeField, base, 16f);
+            float zoom = getNumberField(zoomField, base, -1f);
+            float sz = zoom > 0.0001f ? baseSize * zoom : -1f;
+            if(sz <= 0.0001f && measured != null && measured.width > 0.001f){
+                sz = measured.width / (2f * tilesize);
+            }
+            if(sz <= 0.0001f) return measured != null;
+
+            float szh = sz * drawH / drawW;
+            float cx = Core.camera.position.x / tilesize;
+            float cy = Core.camera.position.y / tilesize;
+            cx = (2f * sz) <= world.width() ? Mathf.clamp(cx, sz, world.width() - sz) : world.width() / 2f;
+            cy = (2f * szh) <= world.height() ? Mathf.clamp(cy, szh, world.height() - szh) : world.height() / 2f;
+            viewRect.set((cx - sz) * tilesize, (cy - szh) * tilesize, sz * 2f * tilesize, szh * 2f * tilesize);
+            return true;
+        }
+
+        private float getNumberField(java.lang.reflect.Field field, Object instance, float fallback){
+            try{
+                if(field == null) return fallback;
+                Object value = field.get(instance);
+                return value instanceof Number ? ((Number)value).floatValue() : fallback;
+            }catch(Throwable ignored){
+                return fallback;
             }
         }
 

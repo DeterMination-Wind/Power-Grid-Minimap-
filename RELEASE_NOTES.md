@@ -1,3 +1,19 @@
+## v1.18.2 / PGMM (Power Grid Minimap)
+
+### 中文
+
+- 修复 MI2U 小地图在非正方形布局、缩放或边栏尺寸变化时，PGMM 叠加层使用错误绘制区域的问题；电网标记和视口范围现在会跟随实际地图区域。
+- 当 MI2U 暴露的视口矩形缺失或比例异常时，PGMM 会基于当前缩放、相机和世界尺寸回退计算视口，避免标记偏移、裁剪或不显示。
+- 构建 wrapper 更新到 Gradle 9.4.0。
+
+### English
+
+- Fixed PGMM using the wrong drawing area on MI2U minimaps with non-square layouts, zoom changes, or side-panel size changes. Grid markers and the viewport now follow the actual map area.
+- Added a fallback viewport calculation based on zoom, camera position, and world size when MI2U exposes a missing or malformed view rectangle, preventing shifted, clipped, or invisible markers.
+- Updated the Gradle wrapper to 9.4.0.
+
+---
+
 ## v1.18.1 更新日志（PGMM / Power Grid Minimap）
 
 ### 🛠️ Bug 修复
