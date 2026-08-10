@@ -25,6 +25,8 @@
   - 圈出建议隔离的“正电岛”（让部分区域先恢复供电）
   - 标记建议禁用的冲击反应堆（当它们是主要耗电来源时）
 - 电力表（Power Table）：以列表形式汇总“大电网”的概览数据（当前盈亏、近期最低值等），便于快速定位最糟糕的电网；在安装 MindustryX 时可作为 OverlayUI 窗口显示。
+- MI2U 小地图叠加层（v1.18.0）：若安装了 MI2U / MI2-Utilities 模组，可把电网着色叠加层绘制到其小地图窗口；在设置中开启「Draw on MI2U minimap」，或用 `/pgmm-mi2 [on/off/refresh]` 命令即时控制。
+- 多人断电提醒（v1.13.0）：断网提醒触发时，可向队伍聊天发送断电建议连接点消息（可配置开关与最小发送间隔）。
 - 启动检查更新：可选在启动时检查新版本并提示。
 
 ### 使用方法
@@ -32,6 +34,7 @@
 - 直接打开小地图或按 `M` 打开全屏大地图即可看到叠加层。
 - 数值含义：`> 0` 代表供电富余，`< 0` 代表缺电（数值可能随负载/电池充放电而波动）。
 - 设置入口：`设置 → 模组 → 电网小地图 (Power Grid Minimap)`（分类名称会随游戏语言变化）。
+- MI2U 小地图叠加层：在 `设置 → 模组 → 电网小地图` 中开启「Draw on MI2U minimap」，或在聊天中执行 `/pgmm-mi2 on`（`off` 关闭，`refresh` 重新检测并挂载）。
 
 ### 安装
 
@@ -46,13 +49,13 @@
 
 ### 构建（可选，开发者）
 
-在 `Mindustry-master` 根目录执行：
+在本仓库根目录执行：
 
 ```powershell
-./gradlew.bat :powergrid-minimap:zipMod
+./gradlew zipMod
 ```
 
-输出：`mods/powergrid-minimap/build/libs/`
+输出：`build/libs/`
 
 安卓本地构建（在本仓库根目录）：
 
@@ -78,6 +81,8 @@ Power Grid Minimap is a client-side overlay mod. It colors each **separate power
 - Split alerts + reconnect hints: if a large grid splits and one side becomes negative within a time window, the mod warns you and marks suggested reconnect points/lines (thresholds and style are configurable).
 - Power Rescue Advisor (Beta): when a grid stays negative, shows actionable hints such as outlining “positive islands” to isolate and marking Impact Reactors to disable when relevant.
 - Power Table: a compact list view for large grids (current balance + recent minimum, etc.). If MindustryX is installed, it can be shown as an OverlayUI window.
+- MI2U minimap overlay (v1.18.0): with the MI2U / MI2-Utilities mod installed, the grid coloring overlay can be drawn on its minimap window; enable it in settings ("Draw on MI2U minimap") or control it via the `/pgmm-mi2 [on/off/refresh]` command.
+- Multiplayer power-off alerts (v1.13.0): when a split alert fires, an optional team-chat message with the suggested reconnect point can be sent (toggle and minimum interval configurable).
 - Optional update check on game start.
 
 ### Usage
@@ -85,6 +90,7 @@ Power Grid Minimap is a client-side overlay mod. It colors each **separate power
 - Just open the minimap or press `M` for the full map.
 - Balance meaning: `> 0` surplus, `< 0` deficit (values may fluctuate with load/battery behavior).
 - Settings: `Settings → Mods → Power Grid Minimap`.
+- MI2U minimap overlay: enable "Draw on MI2U minimap" in `Settings → Mods → Power Grid Minimap`, or use `/pgmm-mi2 on` in chat (`off` to disable, `refresh` to re-detect and reattach).
 
 ### Install
 
@@ -97,13 +103,13 @@ Discord: https://discord.com/channels/391020510269669376/1467903894716940522
 
 ### Build (Optional)
 
-From the `Mindustry-master` root:
+From this repo root:
 
 ```powershell
-./gradlew.bat :powergrid-minimap:zipMod
+./gradlew zipMod
 ```
 
-Output: `mods/powergrid-minimap/build/libs/`
+Output: `build/libs/`
 
 Android jar (from this repo root):
 

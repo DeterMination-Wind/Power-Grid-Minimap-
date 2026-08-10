@@ -5,7 +5,9 @@
 Power-Grid-Minimap-repo-clone/
 |-- .github/
 |   \-- workflows/
+|       |-- pr.yml
 |       \-- release.yml
+|-- Detail.md
 |-- bin/
 |   \-- main/
 |       |-- bundles/
@@ -28,6 +30,7 @@ Power-Grid-Minimap-repo-clone/
 |-- gradlew
 |-- gradlew.bat
 |-- LICENSE
+|-- mod.hjson
 |-- mod.json
 |-- OverlayUI使用说明.md
 |-- pgmm_api_dox.md

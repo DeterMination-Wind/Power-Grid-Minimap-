@@ -59,13 +59,13 @@ Sources (original files are kept):
 
 ### 构建（可选，开发者）
 
-在 `Mindustry-master` 根目录执行：
+在本仓库根目录执行：
 
 ```powershell
-./gradlew.bat :powergrid-minimap:zipMod
+./gradlew zipMod
 ```
 
-输出：`mods/powergrid-minimap/build/libs/`
+输出：`build/libs/`
 
 安卓本地构建（在本仓库根目录）：
 
@@ -110,13 +110,13 @@ Discord: https://discord.com/channels/391020510269669376/1467903894716940522
 
 ### Build (Optional)
 
-From the `Mindustry-master` root:
+From this repo root:
 
 ```powershell
-./gradlew.bat :powergrid-minimap:zipMod
+./gradlew zipMod
 ```
 
-Output: `mods/powergrid-minimap/build/libs/`
+Output: `build/libs/`
 
 Android jar (from this repo root):
 
