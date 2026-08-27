@@ -52,3 +52,7 @@ Open the minimap or full map after enabling the mod. Display styles and threshol
 ~~~
 
 Desktop artifacts are written to build/libs/ and Android artifacts to dist/.
+
+## 文档
+
+开发与维护文档见 [docs/README.md](docs/README.md)（架构总览、开发指南、版本与发布、测试清单、术语表）。玩家视角的完整功能说明见 [DOC.md](DOC.md)。
