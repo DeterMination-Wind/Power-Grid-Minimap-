@@ -83,3 +83,4 @@ src/main/resources/bundles/     bundle*.properties 多语言文案
 - 对 MDtX / MI2U 一律经桥接口或反射访问，缺失时静默降级，不允许 import 后硬依赖。
 - 缺电救援建议、电力表、MI2U 叠加、联机兼容标记默认关闭。
 - 保持 Java 8 字节码兼容（`options.release.set(8)`）。
+- 原生标记的 minimap 可见性由 `showOnMinimap()` 按字段类型写入：v160.1 起该字段是 `@IndexBool int`（`MapMarkers.mapMarkers` 的索引），必须在 `Call.createMarker` 注册前写成非 -1，注册时会被 `MapMarkers.add()` 改写成真实索引；旧版仍是 boolean。
