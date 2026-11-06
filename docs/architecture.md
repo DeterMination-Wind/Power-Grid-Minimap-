@@ -82,5 +82,6 @@ src/main/resources/bundles/     bundle*.properties 多语言文案
 - 纯客户端：不要求服务器安装；联机告警只走聊天消息路径。
 - 对 MDtX / MI2U 一律经桥接口或反射访问，缺失时静默降级，不允许 import 后硬依赖。
 - 缺电救援建议、电力表、MI2U 叠加、联机兼容标记默认关闭。
+- 场景控件（`Table` / `Element` 等）只能在渲染线程创建：模组构造函数由 `Vars.loadAsync` 在资源加载线程执行，所以 `PowerTableOverlay` 在 `ensurePowerTableAttached()` 中惰性创建；不要在字段初始化或构造函数里 `new` 任何 UI，否则 Arc 会记录 `RuntimeException: UI should be created in main Thread`。
 - 保持 Java 8 字节码兼容（`options.release.set(8)`）。
 - 原生标记的 minimap 可见性由 `showOnMinimap()` 按字段类型写入：v160.1 起该字段是 `@IndexBool int`（`MapMarkers.mapMarkers` 的索引），必须在 `Call.createMarker` 注册前写成非 -1，注册时会被 `MapMarkers.add()` 改写成真实索引；旧版仍是 boolean。
