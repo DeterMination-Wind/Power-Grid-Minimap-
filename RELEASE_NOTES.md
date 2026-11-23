@@ -6,10 +6,10 @@
 
 ### 本次修复
 
-- **修复发电折线图与电力表的 OverlayUI 窗口缩放不生效，图表现在会随窗口大小动态铺满内容区**
+- **修复 OverlayUI 窗口左下角缩放手柄无法拖动的问题，发电折线图与电力表现在可以正常调整大小**
 
 ## English
 
 ### Fixed
 
-- **OverlayUI windows for the power chart and power table now resize correctly, and the chart fills the available content area instead of leaving blank space**
+- **The OverlayUI bottom-left resize handle now works for the power chart and power table windows**
