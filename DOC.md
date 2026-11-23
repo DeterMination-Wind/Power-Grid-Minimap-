@@ -38,12 +38,14 @@ Sources (original files are kept):
   - 圈出建议隔离的“正电岛”（让部分区域先恢复供电）
   - 标记建议禁用的冲击反应堆（当它们是主要耗电来源时）
 - 电力表（Power Table）：以列表形式汇总“大电网”的概览数据（当前盈亏、近期最低值等），便于快速定位最糟糕的电网；在安装 MindustryX 时可作为 OverlayUI 窗口显示。
+- 发电折线图（Power Chart）：在游戏过程中以折线图显示玩家电网中各类发电机的发电量（同一种发电机合并为一条线），可一键切换为“占当时总发电量的百分比”模式；鼠标悬停可查看该时刻各发电机类别的具体发电量，以及当时最耗电的建筑名称。安装 MindustryX 时作为 OverlayUI 窗口显示，否则挂在小地图左侧。
 - 启动检查更新：可选在启动时检查新版本并提示。
 
 ### 使用方法
 
 - 直接打开小地图或按 `M` 打开全屏大地图即可看到叠加层。
 - 数值含义：`> 0` 代表供电富余，`< 0` 代表缺电（数值可能随负载/电池充放电而波动）。
+- 发电折线图默认关闭：在设置中开启后，点击窗口上的“折线/占比”按钮切换模式，鼠标悬停折线图查看采样点详情。
 - 设置入口：`设置 → 模组 → 电网小地图 (Power Grid Minimap)`（分类名称会随游戏语言变化）。
 
 ### 安装
@@ -91,12 +93,14 @@ Power Grid Minimap is a client-side overlay mod. It colors each **separate power
 - Split alerts + reconnect hints: if a large grid splits and one side becomes negative within a time window, the mod warns you and marks suggested reconnect points/lines (thresholds and style are configurable).
 - Power Rescue Advisor (Beta): when a grid stays negative, shows actionable hints such as outlining “positive islands” to isolate and marking Impact Reactors to disable when relevant.
 - Power Table: a compact list view for large grids (current balance + recent minimum, etc.). If MindustryX is installed, it can be shown as an OverlayUI window.
+- Power Chart: a live line chart of generation grouped by generator type (all generators of the same block share one line), with a one-click share mode showing each type's percentage of total generation at that moment. Hovering shows per-type generation and the name of the top power-consuming building at that time. It is an OverlayUI window when MindustryX is installed, and sits to the left of the minimap otherwise.
 - Optional update check on game start.
 
 ### Usage
 
 - Just open the minimap or press `M` for the full map.
 - Balance meaning: `> 0` surplus, `< 0` deficit (values may fluctuate with load/battery behavior).
+- The power chart is off by default: enable it in settings, use the `Lines/Share` button in the window to switch modes, and hover the chart for per-sample details.
 - Settings: `Settings → Mods → Power Grid Minimap`.
 
 ### Install
@@ -193,6 +197,7 @@ Output: `dist/powergrid-minimap-android.jar`
     - 小地图/全屏地图叠加绘制
     - 缺电救援建议（正电岛多边形圈选、冲击反应堆禁用建议、去抖窗口）
     - Power Table（HUD 或 MindustryX OverlayUI）
+    - Power Chart 发电折线图（按发电机类型采样、折线/占比切换、悬停详情）
     - 与 MI2 / MindustryX 的可选集成（反射）
     - 设置页注册（已改为 MindustryX 风格行组件）
 - `src/main/java/powergridminimap/PgmmSettingsWidgets.java`
@@ -233,6 +238,12 @@ Power Table 可在两种宿主中显示：
 2) 安装了 MindustryX：
    - 通过反射调用 `OverlayUI.INSTANCE.registerWindow(...)` 注册为 OverlayUI 窗口。
    - 此时 `PowerTableOverlay` 会进入 `hostedByOverlayUI=true` 模式：不再自己 setPosition，避免与 OverlayUI 拖拽/吸附冲突。
+
+### Power Chart（发电折线图）
+
+- 与 Power Table 相同的宿主策略：MindustryX 下注册为 `pgmm-power-chart` OverlayUI 窗口；否则挂在 `ui.hudGroup` 中小地图左侧（空间不足时放到小地图下方）。
+- 数据采集在 `Trigger.update` 中按 1 秒采样（`PowerChartData`）：遍历玩家队伍各电网的 `producers`，按发电机 `block.id` 聚合 `getPowerProduction() * 60 * timeScale()`（`getPowerProduction()` 已包含发电机效率）；同时记录每个采样点耗电最大的 `consumers` 建筑名称与坐标。
+- 绘制在 `PowerChartCanvas`（自定义 `Element`）：折线模式按窗口内最大发电量缩放；占比模式按每个采样点的 `value / total * 100` 绘制。X 轴使用真实采样时间戳，暂停/关闭期间不会把时间轴压缩。鼠标悬停用 `screenToLocalCoordinates` 定位最近采样点，绘制十字线与详情浮层。
 
 ---
 

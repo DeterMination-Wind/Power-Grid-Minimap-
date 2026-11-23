@@ -25,6 +25,13 @@ Power Table 可在两种宿主中显示：
    - 通过反射调用 `OverlayUI.INSTANCE.registerWindow(...)` 注册为 OverlayUI 窗口。
    - 此时 `PowerTableOverlay` 会进入 `hostedByOverlayUI=true` 模式：不再自己 setPosition，避免与 OverlayUI 拖拽/吸附冲突。
 
+### Power Chart（发电折线图）
+
+- 与 Power Table 相同的宿主策略：MindustryX 下注册为 `pgmm-power-chart` OverlayUI 窗口；否则挂在 `ui.hudGroup` 中小地图左侧（空间不足时放到小地图下方）。
+- 数据采集在 `Trigger.update` 中按 1 秒采样（`PowerChartData`）：遍历玩家队伍各电网的 `producers`，按发电机 `block.id` 聚合 `getPowerProduction() * 60 * timeScale()`（`getPowerProduction()` 已包含发电机效率）；同时记录每个采样点耗电最大的 `consumers` 建筑名称与坐标。
+- 绘制在 `PowerChartCanvas`（自定义 `Element`）：折线模式按窗口内最大发电量缩放；占比模式按每个采样点的 `value / total * 100` 绘制。X 轴使用真实采样时间戳，暂停/关闭期间不会把时间轴压缩。鼠标悬停用 `screenToLocalCoordinates` 定位最近采样点，绘制十字线与详情浮层。
+- 历史窗口默认 120 秒，可在设置中调整；世界加载、切换队伍或软重启时清空。
+
 ---
 
 ## 3) MI2 小地图集成（可选）

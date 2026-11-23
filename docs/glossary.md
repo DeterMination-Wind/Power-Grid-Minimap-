@@ -33,6 +33,9 @@ Mindustry 中由导线/节点连通的一组建筑构成的电力图。PGMM 按�
 ### 电力表（PowerTableOverlay）
 以列表汇总大电网概览（当前盈亏、近期最低值等），默认关闭；MindustryX 下注册为 OverlayUI 窗口，原版回退为普通 HUD 元素。
 
+### 发电折线图（PowerChartOverlay）
+按发电机类型聚合玩家队伍的实时发电量并绘制折线，可切换为“占当时总发电量百分比”模式；悬停显示各类型发电量与当时最耗电建筑。默认关闭，MindustryX 下为 OverlayUI 窗口。
+
 ## 集成
 
 ### 桥接口（mdtxcompat）
@@ -42,7 +45,7 @@ Mindustry 中由导线/节点连通的一组建筑构成的电力图。PGMM 按�
 MI2-Utilities-Java 模组。PGMM 通过反射访问其小地图（`mi2u.ui.MinimapMindow`）把叠加画上去，未安装时静默降级；该叠加默认关闭。
 
 ### OverlayUI
-MindustryX 的悬浮窗管理器。PGMM 的电力表可注册为其中一个窗口（可拖动/固定）；窗口可见性由 OverlayUI 自身设置控制，PGMM 只在开关变化时同步一次。
+MindustryX 的悬浮窗管理器。PGMM 的电力表与发电折线图可注册为其中的窗口（可拖动/固定）；窗口可见性由 OverlayUI 自身设置控制，PGMM 只在开关变化时同步一次。
 
 ### 兼容标记（`<PGMM>(x,y)`）
 联机时经聊天消息发送的标记文本（`<PGMM><标签>(x,y)`），让未装 PGMM 的客户端也能看到告警位置。默认关闭。

@@ -45,6 +45,7 @@
     - 小地图/全屏地图叠加绘制
     - 缺电救援建议（正电岛多边形圈选、冲击反应堆禁用建议、去抖窗口）
     - Power Table（HUD 或 MindustryX OverlayUI）
+    - Power Chart 发电折线图（按发电机类型采样、折线/占比切换、悬停详情）
     - 与 MI2 / MindustryX 的可选集成（反射）
     - 设置页注册（已改为 MindustryX 风格行组件）
 - `src/main/java/powergridminimap/PgmmSettingsWidgets.java`

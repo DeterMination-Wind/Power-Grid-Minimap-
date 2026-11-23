@@ -37,6 +37,7 @@ PowerGridCache ──► GridInfo / MarkerInfo / MarkerRectInfo（见 PgmmTypes.
    |-- SplitWatcher ──► SplitAlert      电网分裂检测 → 告警 + 重连建议连线
    |-- RescueAdvisor ──► RescueAlert    持续负电 → 救援建议（正电岛隔离 / 冲击反应堆禁用）
    |-- PowerTableOverlay                电力表（默认关）；MDtX 下注册为 OverlayUI 窗口
+   |-- PowerChartOverlay                发电折线图（默认关）；MDtX 下注册为 OverlayUI 窗口
    `-- NativeMarkers                    联机兼容：聊天发送 "<PGMM><标签>(x,y)" 标记
 ```
 
@@ -48,7 +49,7 @@ PowerGridCache ──► GridInfo / MarkerInfo / MarkerRectInfo（见 PgmmTypes.
 ## 设置系统
 
 - 独立运行：`registerSettings()` 调 `ui.settings.addCategory(category, Icon.powerSmall, this::bekBuildSettings)`。
-- 全部设置项集中在 `bekBuildSettings(SettingsMenuDialog.SettingsTable)`，控件由 `PgmmSettingsWidgets` 提供图标行样式；分组：Basic / Integration / Alerts & Markers / Advanced / Rescue / Power Table / Performance / Update。
+- 全部设置项集中在 `bekBuildSettings(SettingsMenuDialog.SettingsTable)`，控件由 `PgmmSettingsWidgets` 提供图标行样式；分组：Basic / Integration / Alerts & Markers / Advanced / Rescue / Power Table / Power Chart / Performance / Update。
 - 设置 key 统一 `pgmm-` 前缀，文案 key 统一 `pgmm.*` / `setting.pgmm.*`，源文件在 `src/main/resources/bundles/bundle*.properties`（约 30 种语言）。
 
 ## Neon 聚合形态

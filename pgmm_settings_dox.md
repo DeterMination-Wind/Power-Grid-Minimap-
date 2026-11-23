@@ -47,6 +47,7 @@ PGMM 使用 Mindustry 原生 `Core.settings` 存取配置：
 - `pgmm.section.advanced`（高级）
 - `setting.pgmm.rescue.section`（缺电救援）
 - `setting.pgmm.powertable.section`（电力表）
+- `setting.pgmm.powerchart.section`（发电折线图）
 - `pgmm.section.performance`（性能）
 
 ---
