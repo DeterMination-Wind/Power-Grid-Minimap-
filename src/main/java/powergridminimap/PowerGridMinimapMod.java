@@ -3096,18 +3096,18 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
 
         @Override
         public float getPrefWidth(){
-            if(!hostedByOverlayUI) return super.getPrefWidth();
-            float pref = super.getPrefWidth();
-            float w = parent != null ? parent.getWidth() : width;
-            return w > 0.001f ? Math.max(pref, w) : pref;
+            if(hostedByOverlayUI && width > 0.001f){
+                return width;
+            }
+            return super.getPrefWidth();
         }
 
         @Override
         public float getPrefHeight(){
-            if(!hostedByOverlayUI) return super.getPrefHeight();
-            float pref = super.getPrefHeight();
-            float h = parent != null ? parent.getHeight() : height;
-            return h > 0.001f ? Math.max(pref, h) : pref;
+            if(hostedByOverlayUI && height > 0.001f){
+                return height;
+            }
+            return super.getPrefHeight();
         }
 
         @Override
@@ -3313,22 +3313,22 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
 
         @Override
         public float getPrefWidth(){
-            if(!hostedByOverlayUI){
-                float screen = Core.graphics == null ? 380f : Core.graphics.getWidth() - Scl.scl(8f);
-                float pref = Math.max(380f, super.getPrefWidth());
-                return Math.max(180f, Math.min(pref, screen));
+            if(hostedByOverlayUI){
+                return width > 0.001f ? width : super.getPrefWidth();
             }
-            float pref = super.getPrefWidth();
-            float w = parent != null ? parent.getWidth() : width;
-            return w > 0.001f ? Math.max(pref, w) : pref;
+            float screen = Core.graphics == null ? 380f : Core.graphics.getWidth() - Scl.scl(8f);
+            float pref = Math.max(380f, super.getPrefWidth());
+            return Math.max(180f, Math.min(pref, screen));
         }
 
         @Override
         public float getPrefHeight(){
-            if(!hostedByOverlayUI) return super.getPrefHeight();
-            float pref = super.getPrefHeight();
-            float h = parent != null ? parent.getHeight() : height;
-            return h > 0.001f ? Math.max(pref, h) : pref;
+            //Hosted mode must report its own current size, not parent.height: OverlayUI packs the
+            //content table after a resize, and parent.height would add the header again each pack.
+            if(hostedByOverlayUI && height > 0.001f){
+                return height;
+            }
+            return super.getPrefHeight();
         }
 
         private void rebuildStatic(){
@@ -3356,7 +3356,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
 
             canvas = new PowerChartCanvas(data, this);
             canvas.touchable = Touchable.disabled;
-            add(canvas).growX().height(190f).padTop(4f).row();
+            add(canvas).grow().padTop(4f).row();
 
             Label hint = add(Core.bundle.get("pgmm.powerchart.hint", "Hover the chart for details."))
                 .color(Color.gray).padTop(2f).left().get();
@@ -3694,6 +3694,16 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
         PowerChartCanvas(PowerChartData data, PowerChartOverlay owner){
             this.data = data;
             this.owner = owner;
+        }
+
+        @Override
+        public float getPrefWidth(){
+            return 320f;
+        }
+
+        @Override
+        public float getPrefHeight(){
+            return 190f;
         }
 
         @Override
