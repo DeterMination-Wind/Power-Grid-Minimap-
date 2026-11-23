@@ -4,20 +4,12 @@
 
 ## 中文
 
-### 本次新增
-
-- **新增发电折线图：按发电机类型汇总玩家电网的实时发电量，支持折线/占比切换，悬停可查看各类型发电量与当时最耗电的建筑**
-
 ### 本次修复
 
-- **HUD 模式下的电力表关闭后可以再次开启，不再需要重启游戏**
+- **修复发电折线图与电力表的 OverlayUI 窗口缩放不生效，图表现在会随窗口大小动态铺满内容区**
 
 ## English
 
-### Added
-
-- **Added a power generation chart that groups live generation by generator type, supports line/share modes, and shows per-type output plus the top consumer on hover**
-
 ### Fixed
 
-- **The HUD power table can be re-enabled after being turned off without restarting the game**
+- **OverlayUI windows for the power chart and power table now resize correctly, and the chart fills the available content area instead of leaving blank space**
