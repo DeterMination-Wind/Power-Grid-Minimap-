@@ -3061,6 +3061,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
         private TextureRegionDrawable whiteDrawable;
         //true = this table is inside MindustryX OverlayUI.Window; false = attached directly to hudGroup and anchored near minimap.
         private boolean hostedByOverlayUI = false;
+        private float lastHostedWidth = -1f, lastHostedHeight = -1f;
 
         private final Color cId = Color.valueOf("9cdcfe"); //VS Code: variable
         private final Color cKey = Color.valueOf("d4d4d4"); //VS Code: default text
@@ -3077,6 +3078,16 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
         private boolean powerTableEnabled(){
             boolean enabled = Core.settings.getBool(keyEnabled, true) && Core.settings.getBool(keyPowerTableEnabled, false);
             return enabled && state != null && state.isGame() && world != null && !world.isGenerating() && player != null;
+        }
+
+        /** Clears OverlayUI's cached Window pref size when the window is being resized. */
+        private void syncHostedSize(){
+            if(!hostedByOverlayUI || width <= 0.001f) return;
+            if(width != lastHostedWidth || height != lastHostedHeight){
+                lastHostedWidth = width;
+                lastHostedHeight = height;
+                if(parent != null) parent.invalidateHierarchy();
+            }
         }
 
         void setHostedByOverlayUI(boolean hosted){
@@ -3113,6 +3124,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
         @Override
         public void act(float delta){
             super.act(delta);
+            syncHostedSize();
 
             boolean enabled = powerTableEnabled();
             if(!enabled) return;
@@ -3269,6 +3281,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
         private boolean shareMode = false;
         private long lastTotalShown = Long.MIN_VALUE;
         private int lastModeShown = -1;
+        private float lastHostedWidth = -1f, lastHostedHeight = -1f;
 
         PowerChartOverlay(){
             touchable = Touchable.childrenOnly;
@@ -3289,6 +3302,16 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
         private boolean chartEnabled(){
             boolean enabled = Core.settings.getBool(keyEnabled, true) && Core.settings.getBool(keyPowerChartEnabled, false);
             return enabled && state != null && state.isGame() && world != null && !world.isGenerating() && player != null;
+        }
+
+        /** Clears OverlayUI's cached Window pref size when the window is being resized. */
+        private void syncHostedSize(){
+            if(!hostedByOverlayUI || width <= 0.001f) return;
+            if(width != lastHostedWidth || height != lastHostedHeight){
+                lastHostedWidth = width;
+                lastHostedHeight = height;
+                if(parent != null) parent.invalidateHierarchy();
+            }
         }
 
         void resetData(){
@@ -3377,6 +3400,7 @@ public class PowerGridMinimapMod extends mindustry.mod.Mod{
         @Override
         public void act(float delta){
             super.act(delta);
+            syncHostedSize();
 
             boolean enabled = chartEnabled();
             if(!enabled) return;
